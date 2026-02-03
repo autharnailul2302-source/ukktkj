@@ -35,12 +35,31 @@
         async function initFirebase() {
             try {
                 let firebaseConfig;
-                // Cek konfigurasi environment atau gunakan dummy aman untuk offline
-                if (typeof __firebase_config !== 'undefined') {
+                
+                // --- [PENTING] AREA KONFIGURASI MANUAL ---
+                // Config Firebase dari user
+                const customConfig = {
+                    apiKey: "AIzaSyAdqApOvuUXrZUO19NfiqZCLSyUYR74w5M",
+                    authDomain: "waliq-ded98.firebaseapp.com",
+                    projectId: "waliq-ded98",
+                    storageBucket: "waliq-ded98.firebasestorage.app",
+                    messagingSenderId: "915222555864",
+                    appId: "1:915222555864:web:25320841c97661172e3bad",
+                    measurementId: "G-K51RW0YQ0M"
+                };
+                // ------------------------------------------
+
+                // Cek konfigurasi: Prioritaskan Manual, lalu Environment, lalu Gagal
+                if (customConfig.apiKey && customConfig.apiKey !== "GANTI_DENGAN_API_KEY_ANDA") {
+                    console.log("Menggunakan Konfigurasi Manual");
+                    firebaseConfig = customConfig;
+                } else if (typeof __firebase_config !== 'undefined') {
+                    console.log("Menggunakan Konfigurasi Environment");
                     firebaseConfig = JSON.parse(__firebase_config);
                 } else {
                     console.warn("Mode Offline: Config Firebase tidak ditemukan.");
-                    updateConnectionStatus(false, "Mode Offline (Lokal)");
+                    updateConnectionStatus(false, "Offline (Perlu Config)");
+                    alert("Aplikasi berjalan dalam MODE OFFLINE.\n\nAgar data masuk ke database:\n1. Buka kode sumber (source code).\n2. Cari bagian 'AREA KONFIGURASI MANUAL'.\n3. Isi dengan config dari Firebase Console Anda.");
                     return;
                 }
 
@@ -68,6 +87,7 @@
             } catch (error) {
                 console.error("Firebase Init Error (Aplikasi tetap berjalan offline):", error);
                 updateConnectionStatus(false, "Gagal Koneksi");
+                alert("Gagal terhubung ke Firebase: " + error.message + "\nPeriksa koneksi internet atau konfigurasi API Key.");
             }
         }
         
