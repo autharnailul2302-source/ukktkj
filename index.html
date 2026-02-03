@@ -26,7 +26,6 @@
         import { getFirestore, collection, addDoc, onSnapshot, query, getDocs, doc, updateDoc, deleteDoc, setDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // --- FIX: EXPOSE FIREBASE FUNCTIONS TO GLOBAL SCOPE ---
-        // Kita tempelkan ke window agar bisa diakses oleh script biasa di bawah
         window.getDocs = getDocs;
         window.collection = collection;
         window.addDoc = addDoc;
@@ -44,7 +43,7 @@
         window.isFirebaseReady = false;
         window.currentExamToken = "TKJ2025"; 
         window.allQuestionsDB = []; 
-        window.currentExamDocId = null; 
+        window.currentExamDocId = null; // ID dokumen ujian siswa saat ini
 
         async function initFirebase() {
             try {
@@ -119,7 +118,7 @@
 
         initFirebase();
 
-        // Listeners (Ini aman karena ada di dalam module scope)
+        // Listeners
         function listenForToken() {
             if (!window.db) return;
             const q = query(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'app_settings'));
@@ -156,12 +155,11 @@
         }
 
         // --- NEW: START EXAM LOG (Create Document) ---
-        // FIX: Gunakan window.addDoc, window.collection secara eksplisit
         window.saveExamStart = async (data) => {
             if (window.isFirebaseReady && window.db) {
                 try {
-                    const docRef = await window.addDoc(window.collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'), data);
-                    window.currentExamDocId = docRef.id; 
+                    const docRef = await addDoc(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'), data);
+                    window.currentExamDocId = docRef.id; // Simpan ID untuk update nanti
                     console.log("Exam started, doc created:", window.currentExamDocId);
                 } catch (e) {
                     console.error("Failed to log start", e);
@@ -170,15 +168,16 @@
         }
 
         // --- MODIFIED: SAVE RESULT (Update or Create) ---
-        // FIX: Gunakan window.* secara eksplisit
         window.saveExamResult = async (data) => {
             if (window.isFirebaseReady && window.db) {
                 try {
                     if (window.currentExamDocId) {
-                        await window.updateDoc(window.doc(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results', window.currentExamDocId), data);
+                        // Update dokumen yang sudah ada (biar status berubah dari 'Sedang Mengerjakan' ke 'Selesai')
+                        await updateDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results', window.currentExamDocId), data);
                         console.log("Data updated in cloud");
                     } else {
-                        await window.addDoc(window.collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'), data);
+                        // Fallback jika ID hilang (misal refresh), buat baru
+                        await addDoc(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'), data);
                         console.log("Data saved new to cloud");
                     }
                 } catch (e) {
@@ -193,7 +192,7 @@
             const newToken = document.getElementById('teacher-token-input').value.trim().toUpperCase();
             if(!newToken) return alert("Token tidak boleh kosong!");
             if (window.isFirebaseReady && window.db) {
-                await window.addDoc(window.collection(window.db, 'artifacts', window.appId, 'public', 'data', 'app_settings'), {
+                await addDoc(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'app_settings'), {
                     token: newToken,
                     timestamp: Date.now()
                 });
@@ -214,7 +213,7 @@
                     for (const q of questions) {
                         const exists = window.allQuestionsDB.some(dbQ => dbQ.text === q.text && dbQ.packet === pkt);
                         if (!exists) {
-                            await window.addDoc(window.collection(window.db, 'artifacts', window.appId, 'public', 'data', 'questions'), {
+                            await addDoc(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'questions'), {
                                 packet: pkt, text: q.text, options: q.options, correct: q.correct, createdAt: Date.now()
                             });
                             count++;
@@ -231,7 +230,7 @@
 
         window.deleteQuestion = async (id) => {
             if(!confirm("Hapus soal ini?")) return;
-            try { await window.deleteDoc(window.doc(window.db, 'artifacts', window.appId, 'public', 'data', 'questions', id)); } catch(e) { alert("Gagal hapus: " + e.message); }
+            try { await deleteDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'questions', id)); } catch(e) { alert("Gagal hapus: " + e.message); }
         };
 
         window.openQuestionModal = (id = null) => {
@@ -285,10 +284,10 @@
 
             try {
                 if (id) {
-                    await window.updateDoc(window.doc(window.db, 'artifacts', window.appId, 'public', 'data', 'questions', id), data);
+                    await updateDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'questions', id), data);
                 } else {
                     data.createdAt = Date.now();
-                    await window.addDoc(window.collection(window.db, 'artifacts', window.appId, 'public', 'data', 'questions'), data);
+                    await addDoc(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'questions'), data);
                 }
                 window.closeQuestionModal();
             } catch (err) { alert("Gagal menyimpan: " + err.message); }
@@ -299,8 +298,8 @@
                 setTimeout(window.setupRealtimeListener, 1000);
                 return;
             }
-            const q = window.query(window.collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'));
-            window.onSnapshot(q, (snapshot) => {
+            const q = query(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'));
+            onSnapshot(q, (snapshot) => {
                 const results = [];
                 snapshot.forEach((doc) => {
                     results.push({ id: doc.id, ...doc.data() });
@@ -868,13 +867,6 @@
         // --- STUDENT LOGIC MODIFIED ---
         window.handleStudentLogin = async function(e) {
             e.preventDefault();
-            
-            // FIX: Cek database ready
-            if (!window.isFirebaseReady || !window.db) {
-                alert("Database belum siap atau gagal terhubung. Coba refresh halaman!");
-                return;
-            }
-
             try {
                 const name = document.getElementById('student-name').value.trim();
                 const cls = document.getElementById('student-class').value;
@@ -907,13 +899,15 @@
                 submitBtn.disabled = true;
                 submitBtn.innerText = "Memeriksa Data...";
 
-                // FIX: Gunakan window.getDocs dan window.collection
-                const qSnap = await window.getDocs(window.collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'));
+                // Kita fetch data ujian untuk mengecek apakah siswa ini sudah ada
+                const qSnap = await getDocs(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'));
                 let isDuplicate = false;
                 qSnap.forEach(doc => {
                     const d = doc.data();
                     // Cek kesamaan Nama dan Kelas (Case insensitive untuk nama)
                     if (d.studentName.toLowerCase() === name.toLowerCase() && d.className === cls) {
+                        // Opsional: Boleh login ulang kalau statusnya DISKUALIFIKASI atau error tertentu, 
+                        // tapi defaultnya kita blokir untuk keamanan maksimal.
                         isDuplicate = true;
                     }
                 });
