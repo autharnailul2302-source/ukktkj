@@ -29,7 +29,8 @@
         window.appId = 'ukktkj'; 
         window.isFirebaseReady = false;
         window.currentExamToken = "TKJ2025"; 
-        window.allQuestionsDB = []; // Global store for questions from DB
+        window.allQuestionsDB = []; 
+        window.currentExamDocId = null; // ID dokumen ujian siswa saat ini
 
         async function initFirebase() {
             try {
@@ -80,7 +81,7 @@
                 updateConnectionStatus(true, "Terhubung ke Server");
                 
                 listenForToken();
-                listenForQuestions(); // Listen for questions immediately
+                listenForQuestions(); 
                 
                 if (window.currentUserRole === 'teacher') {
                     setupRealtimeListener();
@@ -126,7 +127,6 @@
 
         function listenForQuestions() {
             if (!window.db) return;
-            // Rule 2: No complex queries. Fetch all questions and filter in memory.
             const q = query(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'questions'));
             onSnapshot(q, (snapshot) => {
                 window.allQuestionsDB = [];
@@ -135,17 +135,38 @@
                 });
                 console.log(`Loaded ${window.allQuestionsDB.length} questions from DB`);
                 
-                // If dashboard is open, refresh the question table
                 if (typeof window.filterQuestionBank === 'function' && !document.getElementById('section-dashboard').classList.contains('hidden-section')) {
                     window.filterQuestionBank();
                 }
             });
         }
 
+        // --- NEW: START EXAM LOG (Create Document) ---
+        window.saveExamStart = async (data) => {
+            if (window.isFirebaseReady && window.db) {
+                try {
+                    const docRef = await addDoc(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'), data);
+                    window.currentExamDocId = docRef.id; // Simpan ID untuk update nanti
+                    console.log("Exam started, doc created:", window.currentExamDocId);
+                } catch (e) {
+                    console.error("Failed to log start", e);
+                }
+            }
+        }
+
+        // --- MODIFIED: SAVE RESULT (Update or Create) ---
         window.saveExamResult = async (data) => {
             if (window.isFirebaseReady && window.db) {
                 try {
-                    await addDoc(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'), data);
+                    if (window.currentExamDocId) {
+                        // Update dokumen yang sudah ada (biar status berubah dari 'Sedang Mengerjakan' ke 'Selesai')
+                        await updateDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results', window.currentExamDocId), data);
+                        console.log("Data updated in cloud");
+                    } else {
+                        // Fallback jika ID hilang (misal refresh), buat baru
+                        await addDoc(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'), data);
+                        console.log("Data saved new to cloud");
+                    }
                 } catch (e) {
                     console.error("Failed save", e);
                     if (e.code === 'permission-denied') alert("⚠️ GAGAL MENYIMPAN: Periksa Firestore Rules.");
@@ -166,32 +187,21 @@
             }
         };
 
-        // --- QUESTION DATABASE MANAGEMENT ---
-        
         window.seedDatabase = async () => {
             if (!confirm("Apakah Anda yakin ingin mengupload soal bawaan (Hardcoded) ke Database? Ini akan menambah soal ke bank soal yang ada.")) return;
-            
             const packets = ['A', 'B', 'C'];
             let count = 0;
             const btn = document.getElementById('btn-seed-db');
-            if(btn) {
-                btn.disabled = true;
-                btn.innerText = "Sedang Upload...";
-            }
+            if(btn) { btn.disabled = true; btn.innerText = "Sedang Upload..."; }
 
             try {
                 for (const pkt of packets) {
-                    const questions = questionBank[pkt]; // Get from const
+                    const questions = questionBank[pkt];
                     for (const q of questions) {
-                        // Check duplicate simply by text to avoid massive dupes if clicked twice
                         const exists = window.allQuestionsDB.some(dbQ => dbQ.text === q.text && dbQ.packet === pkt);
                         if (!exists) {
                             await addDoc(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'questions'), {
-                                packet: pkt,
-                                text: q.text,
-                                options: q.options,
-                                correct: q.correct,
-                                createdAt: Date.now()
+                                packet: pkt, text: q.text, options: q.options, correct: q.correct, createdAt: Date.now()
                             });
                             count++;
                         }
@@ -201,19 +211,13 @@
             } catch (e) {
                 alert("Gagal upload: " + e.message);
             } finally {
-                if(btn) {
-                    btn.disabled = false;
-                    btn.innerHTML = `<i data-lucide="upload-cloud" class="w-4 h-4"></i> Upload Soal Bawaan ke DB`;
-                    if(typeof lucide !== 'undefined') lucide.createIcons();
-                }
+                if(btn) { btn.disabled = false; btn.innerHTML = `<i data-lucide="upload-cloud" class="w-4 h-4"></i> Upload Soal Bawaan ke DB`; if(typeof lucide !== 'undefined') lucide.createIcons(); }
             }
         };
 
         window.deleteQuestion = async (id) => {
             if(!confirm("Hapus soal ini?")) return;
-            try {
-                await deleteDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'questions', id));
-            } catch(e) { alert("Gagal hapus: " + e.message); }
+            try { await deleteDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'questions', id)); } catch(e) { alert("Gagal hapus: " + e.message); }
         };
 
         window.openQuestionModal = (id = null) => {
@@ -221,6 +225,8 @@
             const form = document.getElementById('form-question');
             form.reset();
             document.getElementById('q-id').value = id || '';
+            const optsContainer = document.getElementById('q-options-container');
+            optsContainer.innerHTML = '';
             
             if (id) {
                 const q = window.allQuestionsDB.find(x => x.id === id);
@@ -228,26 +234,15 @@
                     document.getElementById('q-packet').value = q.packet;
                     document.getElementById('q-text').value = q.text;
                     document.getElementById('q-correct').value = q.correct;
-                    // Handle dynamic options
-                    const optsContainer = document.getElementById('q-options-container');
-                    optsContainer.innerHTML = '';
-                    q.options.forEach((opt, idx) => {
-                        addOptionInput(opt);
-                    });
+                    q.options.forEach((opt) => addOptionInput(opt));
                 }
             } else {
-                // Default 5 empty options
-                const optsContainer = document.getElementById('q-options-container');
-                optsContainer.innerHTML = '';
                 for(let i=0; i<5; i++) addOptionInput('');
             }
-            
             modal.classList.remove('hidden');
         };
 
-        window.closeQuestionModal = () => {
-            document.getElementById('modal-question').classList.add('hidden');
-        };
+        window.closeQuestionModal = () => { document.getElementById('modal-question').classList.add('hidden'); };
 
         window.addOptionInput = (value = '') => {
             const container = document.getElementById('q-options-container');
@@ -269,12 +264,9 @@
             const packet = document.getElementById('q-packet').value;
             const text = document.getElementById('q-text').value;
             const correct = parseInt(document.getElementById('q-correct').value);
-            
-            // Collect options
             const inputs = document.getElementsByName('options[]');
             const options = [];
             for(let input of inputs) options.push(input.value);
-
             const data = { packet, text, options, correct, updatedAt: Date.now() };
 
             try {
@@ -285,9 +277,7 @@
                     await addDoc(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'questions'), data);
                 }
                 window.closeQuestionModal();
-            } catch (err) {
-                alert("Gagal menyimpan: " + err.message);
-            }
+            } catch (err) { alert("Gagal menyimpan: " + err.message); }
         };
 
         window.setupRealtimeListener = () => {
@@ -812,7 +802,6 @@
             
             if (filtered.length === 0) {
                 if (window.allQuestionsDB.length === 0) {
-                    // NEW: Better Empty State UI
                     tbody.innerHTML = `
                         <tr>
                             <td colspan="3" class="px-6 py-12 text-center">
@@ -836,7 +825,6 @@
                 return;
             }
 
-            // Sort by createdAt usually better, but packet is grouped
             filtered.sort((a,b) => (a.createdAt || 0) - (b.createdAt || 0));
 
             filtered.forEach(q => {
@@ -881,12 +869,9 @@
                     return;
                 }
 
-                // FETCH QUESTIONS FROM DB
                 let dbQuestions = window.allQuestionsDB.filter(q => q.packet === pkt);
                 
-                // Fallback if DB empty (Robustness)
                 if (dbQuestions.length === 0) {
-                    console.warn("DB Kosong untuk paket ini, menggunakan soal hardcoded.");
                     if(questionBank[pkt]) {
                         dbQuestions = [...questionBank[pkt]];
                     } else {
@@ -901,6 +886,18 @@
                 
                 currentQuestionList = [...dbQuestions];
                 shuffleArray(currentQuestionList);
+
+                // --- SAVE START EXAM ---
+                const startData = {
+                    timestamp: Date.now(),
+                    studentName: name,
+                    className: cls,
+                    packetType: pkt,
+                    score: '-',
+                    status: "SEDANG MENGERJAKAN",
+                    violations: 0
+                };
+                window.saveExamStart(startData); // CALL THE NEW FUNCTION
 
                 currentQuestionIndex = 0;
                 renderQuestion();
@@ -1343,10 +1340,19 @@
                 const date = new Date(item.timestamp).toLocaleTimeString('id-ID');
                 
                 const isCheating = item.status.includes('DISKUALIFIKASI');
+                const isDoing = item.status === 'SEDANG MENGERJAKAN';
                 
-                const statusColor = isCheating ? 'text-red-600 font-extrabold flex items-center gap-1' : 'text-green-600 font-bold';
-                const rowClass = isCheating ? 'bg-red-50 border-red-200' : 'hover:bg-slate-50 border-b';
-                const statusIcon = isCheating ? `<i data-lucide="alert-circle" class="w-4 h-4"></i>` : '';
+                // STYLING LOGIC
+                let statusColor = isCheating ? 'text-red-600 font-extrabold flex items-center gap-1' : 'text-green-600 font-bold';
+                let rowClass = isCheating ? 'bg-red-50 border-red-200' : 'hover:bg-slate-50 border-b';
+                let statusIcon = isCheating ? `<i data-lucide="alert-circle" class="w-4 h-4"></i>` : '';
+                
+                // IF DOING EXAM
+                if (isDoing) {
+                    statusColor = 'text-blue-600 font-bold flex items-center gap-1';
+                    rowClass = 'bg-blue-50/50 border-blue-100 hover:bg-blue-50 border-b animate-pulse';
+                    statusIcon = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i>`;
+                }
                 
                 const violationDisplay = item.violations > 0 ? `<span class="bg-red-100 text-red-700 px-2 py-1 rounded text-xs font-bold">${item.violations}x</span>` : '-';
                 const pktColor = item.packetType === 'A' ? 'bg-blue-100 text-blue-700' : item.packetType === 'B' ? 'bg-purple-100 text-purple-700' : 'bg-orange-100 text-orange-700';
