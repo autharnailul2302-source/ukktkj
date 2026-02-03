@@ -5,6 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Try Out Mandiri UKK TKJ</title>
     
+    <!-- Script Penangkap Error (Paling Atas) -->
+    <script>
+        window.onerror = function(message, source, lineno, colno, error) {
+            // Jangan tampilkan error resize observer yang umum dan tidak berbahaya
+            if(message.includes("ResizeObserver")) return;
+            alert("Sistem Error: " + message + "\nBaris: " + lineno);
+        };
+    </script>
+
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     
@@ -25,12 +34,13 @@
 
         async function initFirebase() {
             try {
-                // Cek konfigurasi
                 let firebaseConfig;
+                // Cek konfigurasi environment atau gunakan dummy aman untuk offline
                 if (typeof __firebase_config !== 'undefined') {
                     firebaseConfig = JSON.parse(__firebase_config);
                 } else {
-                    console.log("Mode Offline: Config Firebase tidak ditemukan.");
+                    console.warn("Mode Offline: Config Firebase tidak ditemukan.");
+                    updateConnectionStatus(false, "Mode Offline (Lokal)");
                     return;
                 }
 
@@ -49,14 +59,26 @@
                 
                 window.isFirebaseReady = true;
                 console.log("Firebase Connected");
+                updateConnectionStatus(true, "Terhubung ke Server");
                 
-                // Jika Guru sedang login, trigger listener data
                 if (window.currentUserRole === 'teacher') {
                     setupRealtimeListener();
                 }
 
             } catch (error) {
                 console.error("Firebase Init Error (Aplikasi tetap berjalan offline):", error);
+                updateConnectionStatus(false, "Gagal Koneksi");
+            }
+        }
+        
+        // Helper untuk update UI status
+        function updateConnectionStatus(isOnline, text) {
+            const el = document.getElementById('connection-status');
+            if(el) {
+                el.innerText = text;
+                el.className = isOnline 
+                    ? "text-xs font-bold text-green-400 bg-green-900/30 px-2 py-1 rounded-full border border-green-500/50" 
+                    : "text-xs font-bold text-red-400 bg-red-900/30 px-2 py-1 rounded-full border border-red-500/50";
             }
         }
 
@@ -67,28 +89,37 @@
             if (window.isFirebaseReady && window.db) {
                 try {
                     await addDoc(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'), data);
-                    console.log("Data saved to cloud");
+                    console.log("Data saved to cloud successfully");
                 } catch (e) {
                     console.error("Failed to save to cloud", e);
+                    alert("Gagal menyimpan ke database pusat (Error Jaringan). Nilai tersimpan di layar siswa.");
                 }
             } else {
                 console.log("Disimpan lokal (Firebase tidak aktif)");
+                alert("PERHATIAN: Aplikasi berjalan dalam Mode Offline.\nData TIDAK terkirim ke database guru, hanya tampil di layar ini.");
             }
         }
 
         // Fungsi Global untuk Listen Data (Guru)
         window.setupRealtimeListener = () => {
-            if (!window.isFirebaseReady || !window.db) return;
+            // FIX: Tambahkan retry mechanism jika Firebase belum siap saat fungsi dipanggil
+            if (!window.isFirebaseReady || !window.db) {
+                console.log("Firebase belum siap, mencoba lagi dalam 1 detik...");
+                setTimeout(window.setupRealtimeListener, 1000);
+                return;
+            }
             
+            console.log("Memulai listener data untuk AppID:", window.appId);
             const q = query(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'));
             onSnapshot(q, (snapshot) => {
                 const results = [];
                 snapshot.forEach((doc) => {
                     results.push({ id: doc.id, ...doc.data() });
                 });
-                // Sort descending by time
                 results.sort((a, b) => b.timestamp - a.timestamp);
-                window.updateDashboardTable(results);
+                if(window.updateDashboardTable) window.updateDashboardTable(results);
+            }, (error) => {
+                console.error("Error mengambil data realtime:", error);
             });
         }
     </script>
@@ -138,8 +169,13 @@
     <!-- SECTION: LOGIN -->
     <div id="section-login" class="min-h-screen flex items-center justify-center p-4 bg-slate-900">
         <div class="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden">
-            <div class="bg-blue-600 p-6 text-center">
-                <h1 class="text-2xl font-bold text-white flex flex-col items-center justify-center gap-2">
+            <div class="bg-blue-600 p-6 text-center relative">
+                <!-- Status Koneksi -->
+                <div class="absolute top-4 right-4">
+                    <span id="connection-status" class="text-xs font-bold text-yellow-200 bg-yellow-900/30 px-2 py-1 rounded-full border border-yellow-500/50">Memuat...</span>
+                </div>
+
+                <h1 class="text-2xl font-bold text-white flex flex-col items-center justify-center gap-2 mt-2">
                     <img src="images/logotkj.png" onerror="this.src='https://via.placeholder.com/150?text=Logo+TKJ'" alt="Logo TKJ" class="w-20 h-20 object-contain mb-2 bg-white rounded-full p-1">
                     Try Out Mandiri UKK TKJ
                 </h1>
@@ -148,13 +184,13 @@
             
             <!-- Tabs -->
             <div class="flex border-b">
-                <button id="tab-student" onclick="switchLoginTab('student')" class="flex-1 py-3 text-sm font-medium text-blue-600 border-b-2 border-blue-600 bg-blue-50 transition-colors">Login Siswa</button>
-                <button id="tab-teacher" onclick="switchLoginTab('teacher')" class="flex-1 py-3 text-sm font-medium text-gray-500 hover:text-gray-700 transition-colors">Login Guru</button>
+                <button id="tab-student" onclick="window.switchLoginTab('student')" class="flex-1 py-3 text-sm font-medium text-blue-600 border-b-2 border-blue-600 bg-blue-50 transition-colors">Login Siswa</button>
+                <button id="tab-teacher" onclick="window.switchLoginTab('teacher')" class="flex-1 py-3 text-sm font-medium text-gray-500 hover:text-gray-700 transition-colors">Login Guru</button>
             </div>
 
             <div class="p-8">
                 <!-- Form Siswa -->
-                <form id="form-student" onsubmit="handleStudentLogin(event)" class="space-y-4">
+                <form id="form-student" onsubmit="window.handleStudentLogin(event)" class="space-y-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Nama Lengkap</label>
                         <input type="text" id="student-name" required class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Contoh: Ahmad Dhani">
@@ -171,9 +207,9 @@
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Paket Soal</label>
                         <div class="grid grid-cols-3 gap-2" id="packet-selector">
-                            <button type="button" onclick="selectPacket('A')" id="pkt-A" class="pkt-btn py-2 border rounded-lg font-bold bg-blue-600 text-white border-blue-600">Paket A</button>
-                            <button type="button" onclick="selectPacket('B')" id="pkt-B" class="pkt-btn py-2 border rounded-lg font-bold bg-white text-gray-600 hover:bg-gray-50">Paket B</button>
-                            <button type="button" onclick="selectPacket('C')" id="pkt-C" class="pkt-btn py-2 border rounded-lg font-bold bg-white text-gray-600 hover:bg-gray-50">Paket C</button>
+                            <button type="button" onclick="window.selectPacket('A')" id="pkt-A" class="pkt-btn py-2 border rounded-lg font-bold bg-blue-600 text-white border-blue-600">Paket A</button>
+                            <button type="button" onclick="window.selectPacket('B')" id="pkt-B" class="pkt-btn py-2 border rounded-lg font-bold bg-white text-gray-600 hover:bg-gray-50">Paket B</button>
+                            <button type="button" onclick="window.selectPacket('C')" id="pkt-C" class="pkt-btn py-2 border rounded-lg font-bold bg-white text-gray-600 hover:bg-gray-50">Paket C</button>
                         </div>
                         <input type="hidden" id="selected-packet" value="A">
                     </div>
@@ -181,7 +217,7 @@
                 </form>
 
                 <!-- Form Guru -->
-                <form id="form-teacher" onsubmit="handleTeacherLogin(event)" class="space-y-4 hidden-section">
+                <form id="form-teacher" onsubmit="window.handleTeacherLogin(event)" class="space-y-4 hidden-section">
                     <input type="text" id="teacher-user" placeholder="Username" class="w-full px-4 py-2 border rounded-lg outline-none">
                     <input type="password" id="teacher-pass" placeholder="Password" class="w-full px-4 py-2 border rounded-lg outline-none">
                     <button type="submit" class="w-full bg-gray-800 hover:bg-gray-900 text-white font-bold py-3 rounded-lg shadow-lg">Masuk Dashboard</button>
@@ -209,7 +245,7 @@
                     </div>
                     
                     <!-- Toggle Sidebar Button -->
-                    <button onclick="toggleSidebar()" class="ml-2 p-2 rounded-lg hover:bg-slate-100 border border-slate-200 text-slate-700 flex items-center gap-2">
+                    <button onclick="window.toggleSidebar()" class="ml-2 p-2 rounded-lg hover:bg-slate-100 border border-slate-200 text-slate-700 flex items-center gap-2">
                         <i data-lucide="grid-3x3" class="w-5 h-5"></i> 
                         <span class="hidden md:inline text-sm font-semibold">Daftar Soal</span>
                     </button>
@@ -225,15 +261,15 @@
             
             <!-- Navigation Bottom -->
             <div class="mt-6 pt-4 border-t flex justify-between items-center bg-slate-100 sticky bottom-0 z-20 pb-4">
-                <button id="btn-prev" onclick="changeQuestion(-1)" class="px-6 py-2 rounded-lg font-semibold bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed">
+                <button id="btn-prev" onclick="window.changeQuestion(-1)" class="px-6 py-2 rounded-lg font-semibold bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed">
                     <i data-lucide="chevron-left" class="w-4 h-4 inline mr-1"></i> Sebelumnya
                 </button>
                 
-                <button id="btn-next" onclick="changeQuestion(1)" class="px-6 py-2 rounded-lg font-semibold bg-blue-600 text-white hover:bg-blue-700 shadow-sm flex items-center">
+                <button id="btn-next" onclick="window.changeQuestion(1)" class="px-6 py-2 rounded-lg font-semibold bg-blue-600 text-white hover:bg-blue-700 shadow-sm flex items-center">
                     Selanjutnya <i data-lucide="chevron-right" class="w-4 h-4 inline ml-1"></i>
                 </button>
 
-                 <button id="btn-finish-main" onclick="confirmFinishExam()" class="hidden px-6 py-2 rounded-lg font-semibold bg-green-600 text-white hover:bg-green-700 shadow-sm flex items-center gap-2">
+                 <button id="btn-finish-main" onclick="window.confirmFinishExam()" class="hidden px-6 py-2 rounded-lg font-semibold bg-green-600 text-white hover:bg-green-700 shadow-sm flex items-center gap-2">
                     <i data-lucide="check-circle" class="w-4 h-4"></i> Selesai
                 </button>
             </div>
@@ -243,7 +279,7 @@
         <div id="exam-sidebar" class="fixed top-16 right-0 bottom-0 w-80 bg-white shadow-2xl border-l border-slate-200 z-40 sidebar-closed flex flex-col">
             <div class="p-4 border-b bg-slate-50 flex justify-between items-center">
                 <h3 class="font-bold text-gray-800">Navigasi Soal</h3>
-                <button onclick="toggleSidebar()" class="text-gray-500 hover:text-gray-700">
+                <button onclick="window.toggleSidebar()" class="text-gray-500 hover:text-gray-700">
                     <i data-lucide="x" class="w-5 h-5"></i>
                 </button>
             </div>
@@ -260,14 +296,14 @@
                     <div class="flex items-center gap-1"><div class="w-3 h-3 bg-slate-200 border rounded-full"></div> Belum</div>
                     <div class="flex items-center gap-1"><div class="w-3 h-3 border-2 border-blue-500 rounded-full"></div> Aktif</div>
                 </div>
-                <button onclick="confirmFinishExam()" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 rounded-lg shadow flex items-center justify-center gap-2">
+                <button onclick="window.confirmFinishExam()" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 rounded-lg shadow flex items-center justify-center gap-2">
                     <i data-lucide="log-out" class="w-4 h-4"></i> Hentikan Ujian
                 </button>
             </div>
         </div>
         
         <!-- Overlay -->
-        <div id="sidebar-overlay" onclick="toggleSidebar()" class="fixed inset-0 bg-black/20 z-30 hidden" style="top: 64px;"></div>
+        <div id="sidebar-overlay" onclick="window.toggleSidebar()" class="fixed inset-0 bg-black/20 z-30 hidden" style="top: 64px;"></div>
     </div>
 
     <!-- SECTION: DASHBOARD GURU -->
@@ -278,7 +314,7 @@
                     <div class="bg-blue-500 p-2 rounded-lg"><i data-lucide="monitor" class="w-6 h-6 text-white"></i></div>
                     <div><h1 class="font-bold text-lg">Panel Guru / Admin</h1><p class="text-xs text-slate-400">Monitoring Real-time</p></div>
                 </div>
-                <button onclick="logout()" class="text-slate-300 hover:text-white flex items-center gap-2 text-sm"><i data-lucide="log-out" class="w-4 h-4"></i> Keluar</button>
+                <button onclick="window.logout()" class="text-slate-300 hover:text-white flex items-center gap-2 text-sm"><i data-lucide="log-out" class="w-4 h-4"></i> Keluar</button>
             </div>
         </header>
         <main class="flex-1 max-w-7xl mx-auto w-full p-6">
@@ -286,13 +322,13 @@
                 <div class="p-6 border-b flex flex-col md:flex-row justify-between md:items-center gap-4">
                     <h2 class="text-lg font-bold text-gray-800">Data Hasil Ujian</h2>
                     <div class="flex gap-2">
-                        <select id="filter-session" onchange="filterDashboard()" class="px-3 py-2 border rounded-lg text-sm bg-gray-50">
+                        <select id="filter-session" onchange="window.filterDashboard()" class="px-3 py-2 border rounded-lg text-sm bg-gray-50">
                             <option value="all">Semua Sesi</option>
                             <option value="A">Sesi Paket A</option>
                             <option value="B">Sesi Paket B</option>
                             <option value="C">Sesi Paket C</option>
                         </select>
-                        <button onclick="exportToCSV()" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"><i data-lucide="download" class="w-4 h-4"></i> Export Excel/CSV</button>
+                        <button onclick="window.exportToCSV()" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"><i data-lucide="download" class="w-4 h-4"></i> Export Excel/CSV</button>
                     </div>
                 </div>
                 <div class="overflow-x-auto">
@@ -423,8 +459,8 @@
         let currentQuestionList = [];
         let currentQuestionIndex = 0;
 
-        // --- LOGIN LOGIC ---
-        function switchLoginTab(type) {
+        // --- GLOBAL EXPORTS (For HTML Event Handlers) ---
+        window.switchLoginTab = function(type) {
             const btnStudent = document.getElementById('tab-student');
             const btnTeacher = document.getElementById('tab-teacher');
             const formStudent = document.getElementById('form-student');
@@ -441,62 +477,139 @@
                 formStudent.classList.add('hidden-section');
                 formTeacher.classList.remove('hidden-section');
             }
-        }
+        };
 
-        function selectPacket(pkt) {
+        window.selectPacket = function(pkt) {
             document.querySelectorAll('.pkt-btn').forEach(btn => {
                 btn.className = "pkt-btn py-2 border rounded-lg font-bold bg-white text-gray-600 hover:bg-gray-50";
             });
             const selectedBtn = document.getElementById('pkt-' + pkt);
-            selectedBtn.className = "pkt-btn py-2 border rounded-lg font-bold bg-blue-600 text-white border-blue-600";
-            document.getElementById('selected-packet').value = pkt;
-        }
-
-        function handleStudentLogin(e) {
-            e.preventDefault();
-            const name = document.getElementById('student-name').value;
-            const cls = document.getElementById('student-class').value;
-            const pkt = document.getElementById('selected-packet').value;
-
-            if(!name || !cls) return alert("Data tidak lengkap");
-
-            // Setup Data
-            currentStudent = { name, cls, pkt };
-            
-            // UI Update
-            document.getElementById('header-initial').innerText = name.charAt(0).toUpperCase();
-            document.getElementById('header-name').innerText = name;
-            document.getElementById('header-detail').innerText = `${cls} • Paket ${pkt}`;
-
-            // Initialize Exam
-            currentQuestionList = questionBank[pkt] || questionBank['A']; // Fallback
-            currentQuestionIndex = 0;
-            renderQuestion();
-            renderSidebarButtons();
-
-            // Request Fullscreen (Robust Handling)
-            try {
-                const elem = document.documentElement;
-                if (elem.requestFullscreen) {
-                    elem.requestFullscreen().catch(err => console.log(err));
-                } else if (elem.webkitRequestFullscreen) { /* Safari */
-                    elem.webkitRequestFullscreen();
-                } else if (elem.msRequestFullscreen) { /* IE11 */
-                    elem.msRequestFullscreen();
-                }
-            } catch(err){
-                console.log("Fullscreen aborted or not supported", err);
+            if(selectedBtn) {
+                selectedBtn.className = "pkt-btn py-2 border rounded-lg font-bold bg-blue-600 text-white border-blue-600";
+                document.getElementById('selected-packet').value = pkt;
             }
+        };
 
-            // Switch View
-            document.getElementById('section-login').classList.add('hidden-section');
-            document.getElementById('section-exam').classList.remove('hidden-section');
+        window.handleStudentLogin = function(e) {
+            e.preventDefault();
+            try {
+                const name = document.getElementById('student-name').value.trim();
+                const cls = document.getElementById('student-class').value;
+                const pkt = document.getElementById('selected-packet').value;
+
+                if (!name || !cls) {
+                    alert("Mohon lengkapi Nama dan Kelas!");
+                    return;
+                }
+
+                currentStudent = { name, cls, pkt };
+                
+                // Update UI Update
+                // document.getElementById('header-initial').innerText = name.charAt(0).toUpperCase(); // Removed as logo is used
+                document.getElementById('header-name').innerText = name;
+                document.getElementById('header-detail').innerText = `${cls} • Paket ${pkt}`;
+
+                // Initialize Exam
+                if (!questionBank[pkt]) throw new Error("Paket soal tidak ditemukan!");
+                
+                currentQuestionList = questionBank[pkt];
+                currentQuestionIndex = 0;
+                
+                renderQuestion();
+                renderSidebarButtons();
+
+                // Fullscreen (Robust Handling)
+                try {
+                    const elem = document.documentElement;
+                    if (elem.requestFullscreen) {
+                        elem.requestFullscreen().catch(err => console.log(err));
+                    } else if (elem.webkitRequestFullscreen) { /* Safari */
+                        elem.webkitRequestFullscreen();
+                    } else if (elem.msRequestFullscreen) { /* IE11 */
+                        elem.msRequestFullscreen();
+                    }
+                } catch(err){
+                    console.log("Fullscreen aborted or not supported", err);
+                }
+
+                // Switch View
+                document.getElementById('section-login').classList.add('hidden-section');
+                document.getElementById('section-exam').classList.remove('hidden-section');
+                
+                // Start Logic
+                startExamLogic();
+            } catch(error) {
+                console.error(error);
+                alert("Gagal memulai ujian: " + error.message);
+            }
+        };
+
+        window.handleTeacherLogin = function(e) {
+            e.preventDefault();
+            const u = document.getElementById('teacher-user').value;
+            const p = document.getElementById('teacher-pass').value;
+
+            if (u === 'authar' && p === 'Sedayu@123') {
+                window.currentUserRole = 'teacher';
+                if(window.setupRealtimeListener) window.setupRealtimeListener();
+                
+                document.getElementById('section-login').classList.add('hidden-section');
+                document.getElementById('section-dashboard').classList.remove('hidden-section');
+            } else {
+                alert("Username atau Password Salah");
+            }
+        };
+
+        window.changeQuestion = function(delta) {
+            const newIndex = currentQuestionIndex + delta;
+            if (newIndex >= 0 && newIndex < currentQuestionList.length) {
+                currentQuestionIndex = newIndex;
+                renderQuestion();
+            }
+        };
+
+        window.toggleSidebar = function() {
+            const sidebar = document.getElementById('exam-sidebar');
+            const overlay = document.getElementById('sidebar-overlay');
+            if (sidebar.classList.contains('sidebar-closed')) {
+                sidebar.classList.remove('sidebar-closed');
+                sidebar.classList.add('sidebar-open');
+                overlay.classList.remove('hidden');
+            } else {
+                sidebar.classList.remove('sidebar-open');
+                sidebar.classList.add('sidebar-closed');
+                overlay.classList.add('hidden');
+            }
+        };
+
+        window.confirmFinishExam = function() {
+            // Check unanswered
+            const answeredCount = Object.keys(userAnswers).length;
+            const total = currentQuestionList.length;
             
-            // Start Logic
-            startExamLogic();
-        }
+            let msg = "Apakah Anda yakin ingin menyelesaikan ujian?";
+            if (answeredCount < total) {
+                msg += `\n\nPERHATIAN: Masih ada ${total - answeredCount} soal yang belum dijawab!`;
+            }
+            
+            if (confirm(msg)) {
+                finishExam();
+            }
+        };
 
-        // --- EXAM LOGIC NEW ---
+        window.logout = function() {
+            location.reload();
+        };
+        
+        window.filterDashboard = function() {
+            filterDashboardInternal();
+        };
+
+        window.exportToCSV = function() {
+            exportToCSVInternal();
+        };
+
+        // --- INTERNAL LOGIC ---
         
         function renderQuestion() {
             if(!currentQuestionList || !currentQuestionList[currentQuestionIndex]) return;
@@ -548,8 +661,6 @@
             
             container.innerHTML = html;
             updateNavButtons();
-            
-            // Update Sidebar Highlight
             renderSidebarButtons();
         }
 
@@ -558,70 +669,35 @@
             const btnNext = document.getElementById('btn-next');
             const btnFinish = document.getElementById('btn-finish-main');
 
-            btnPrev.disabled = currentQuestionIndex === 0;
+            if(btnPrev) btnPrev.disabled = currentQuestionIndex === 0;
             
             if (currentQuestionIndex === currentQuestionList.length - 1) {
-                btnNext.classList.add('hidden');
-                btnFinish.classList.remove('hidden');
+                if(btnNext) btnNext.classList.add('hidden');
+                if(btnFinish) btnFinish.classList.remove('hidden');
             } else {
-                btnNext.classList.remove('hidden');
-                btnFinish.classList.add('hidden');
-            }
-        }
-
-        function changeQuestion(delta) {
-            const newIndex = currentQuestionIndex + delta;
-            if (newIndex >= 0 && newIndex < currentQuestionList.length) {
-                currentQuestionIndex = newIndex;
-                renderQuestion();
+                if(btnNext) btnNext.classList.remove('hidden');
+                if(btnFinish) btnFinish.classList.add('hidden');
             }
         }
 
         function jumpToQuestion(idx) {
             currentQuestionIndex = idx;
             renderQuestion();
-            // On mobile, maybe close sidebar automatically
             if (window.innerWidth < 768) {
-                toggleSidebar();
+                window.toggleSidebar();
             }
         }
 
-        function saveAnswer(qId, optIdx, element) {
+        window.saveAnswer = function(qId, optIdx, element) {
             userAnswers[qId] = optIdx;
             
-            // Update UI Selection
-            const group = document.getElementById('opts-' + qId);
-            group.querySelectorAll('label').forEach(lbl => {
-                lbl.className = "flex items-center p-4 rounded-lg border border-gray-200 hover:bg-gray-50 cursor-pointer transition-all mb-3";
-                lbl.querySelector('.radio-indicator').className = "w-4 h-4 rounded-full border border-gray-300 flex items-center justify-center mr-3";
-                lbl.querySelector('.radio-indicator').innerHTML = "";
-            });
-
-            element.className = "flex items-center p-4 rounded-lg border border-blue-500 bg-blue-50 ring-1 ring-blue-500 cursor-pointer transition-all mb-3";
-            element.querySelector('.radio-indicator').className = "w-4 h-4 rounded-full border border-blue-500 bg-blue-600 flex items-center justify-center mr-3 text-white";
-            element.querySelector('.radio-indicator').innerHTML = `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
-            
-            // Update Sidebar Color immediately
-            renderSidebarButtons();
-        }
-
-        // --- SIDEBAR LOGIC ---
-        function toggleSidebar() {
-            const sidebar = document.getElementById('exam-sidebar');
-            const overlay = document.getElementById('sidebar-overlay');
-            if (sidebar.classList.contains('sidebar-closed')) {
-                sidebar.classList.remove('sidebar-closed');
-                sidebar.classList.add('sidebar-open');
-                overlay.classList.remove('hidden');
-            } else {
-                sidebar.classList.remove('sidebar-open');
-                sidebar.classList.add('sidebar-closed');
-                overlay.classList.add('hidden');
-            }
-        }
+            // Re-render to update UI state cleanly (React-like style for vanilla JS)
+            renderQuestion();
+        };
 
         function renderSidebarButtons() {
             const grid = document.getElementById('question-grid');
+            if(!grid) return;
             grid.innerHTML = '';
             
             currentQuestionList.forEach((q, idx) => {
@@ -646,19 +722,17 @@
             });
         }
 
-
-        // --- EXISTING UTILS ---
-
         function startExamLogic() {
-            // Timer
             examTimer = setInterval(() => {
                 timeLeft--;
                 const m = Math.floor(timeLeft / 60).toString().padStart(2, '0');
                 const s = (timeLeft % 60).toString().padStart(2, '0');
-                document.getElementById('timer-display').innerText = `${m}:${s}`;
+                const timerDisplay = document.getElementById('timer-display');
+                if(timerDisplay) timerDisplay.innerText = `${m}:${s}`;
                 
-                if (timeLeft < 300) { // < 5 mins
-                    document.getElementById('timer-box').className = "flex items-center gap-2 px-4 py-2 rounded-lg font-mono font-bold text-lg bg-red-100 text-red-600";
+                if (timeLeft < 300) { 
+                    const timerBox = document.getElementById('timer-box');
+                    if(timerBox) timerBox.className = "flex items-center gap-2 px-4 py-2 rounded-lg font-mono font-bold text-lg bg-red-100 text-red-600";
                 }
 
                 if (timeLeft <= 0) {
@@ -666,19 +740,14 @@
                 }
             }, 1000);
 
-            // Anti-Cheat: Visibility Change
             document.addEventListener("visibilitychange", handleVisibility);
             document.addEventListener("contextmenu", e => e.preventDefault());
 
-            // --- PROTEKSI TAMBAHAN (MOBILE & DESKTOP) ---
-            
-            // 1. Kunci Tombol Back (History Push State)
+            // Proteksi Tambahan
             history.pushState(null, null, location.href);
             window.onpopstate = function () {
                 history.go(1);
             };
-
-            // 2. Cegah Refresh/Tutup Tab
             window.onbeforeunload = function() {
                 return "PERINGATAN: Ujian sedang berlangsung.";
             };
@@ -694,38 +763,18 @@
             }
         }
 
-        function confirmFinishExam() {
-            // Check unanswered
-            const answeredCount = Object.keys(userAnswers).length;
-            const total = currentQuestionList.length;
-            
-            let msg = "Apakah Anda yakin ingin menyelesaikan ujian?";
-            if (answeredCount < total) {
-                msg += `\n\nPERHATIAN: Masih ada ${total - answeredCount} soal yang belum dijawab!`;
-            }
-            
-            if (confirm(msg)) {
-                finishExam();
-            }
-        }
-
         function finishExam(forced = false) {
             clearInterval(examTimer);
             document.removeEventListener("visibilitychange", handleVisibility);
-
-            // Matikan proteksi saat ujian selesai agar siswa bisa keluar
             window.onpopstate = null;
             window.onbeforeunload = null;
 
             // Calculate Score
-            let score = 0;
-            const questions = questionBank[currentStudent.pkt];
             let correctCount = 0;
-
-            questions.forEach(q => {
+            currentQuestionList.forEach(q => {
                 if (userAnswers[q.id] === q.correct) correctCount++;
             });
-            score = Math.round((correctCount / questions.length) * 100);
+            const score = Math.round((correctCount / currentQuestionList.length) * 100);
 
             // Save Data
             const resultData = {
@@ -743,10 +792,11 @@
 
             // Show Result
             document.getElementById('final-score-display').innerText = score;
+            const scoreEl = document.getElementById('final-score-display');
             if (score >= 70) {
-                document.getElementById('final-score-display').className = "text-5xl font-extrabold text-green-600";
+                scoreEl.className = "text-5xl font-extrabold text-green-600";
             } else {
-                document.getElementById('final-score-display').className = "text-5xl font-extrabold text-red-600";
+                scoreEl.className = "text-5xl font-extrabold text-red-600";
             }
 
             try {
@@ -757,30 +807,13 @@
             document.getElementById('section-result').classList.remove('hidden-section');
         }
 
-
-        // --- TEACHER LOGIC ---
-        function handleTeacherLogin(e) {
-            e.preventDefault();
-            const u = document.getElementById('teacher-user').value;
-            const p = document.getElementById('teacher-pass').value;
-
-            if (u === 'authar' && p === 'Sedayu@123') {
-                window.currentUserRole = 'teacher';
-                if(window.setupRealtimeListener) window.setupRealtimeListener();
-                
-                document.getElementById('section-login').classList.add('hidden-section');
-                document.getElementById('section-dashboard').classList.remove('hidden-section');
-            } else {
-                alert("Username atau Password Salah");
-            }
-        }
-
+        // --- DASHBOARD HELPERS ---
         window.updateDashboardTable = function(data) {
             dashboardData = data;
-            filterDashboard();
-        }
+            filterDashboardInternal();
+        };
 
-        function filterDashboard() {
+        function filterDashboardInternal() {
             const filter = document.getElementById('filter-session').value;
             const tbody = document.getElementById('dashboard-table-body');
             tbody.innerHTML = '';
@@ -816,7 +849,7 @@
             });
         }
 
-        function exportToCSV() {
+        function exportToCSVInternal() {
             if (dashboardData.length === 0) return alert("Belum ada data untuk diexport");
             
             let csvContent = "data:text/csv;charset=utf-8,";
@@ -833,10 +866,6 @@
             link.setAttribute("download", "rekap_nilai_ukk.csv");
             document.body.appendChild(link);
             link.click();
-        }
-
-        function logout() {
-            location.reload();
         }
 
         // Initialize Icons Safely
