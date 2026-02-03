@@ -871,6 +871,43 @@
                     return;
                 }
 
+                // --- 1. DETEKSI LOGIN DI PERANGKAT INI (LOCAL STORAGE) ---
+                const localSession = localStorage.getItem('ukktkj_session_done');
+                if (localSession) {
+                    const sessionData = JSON.parse(localSession);
+                    // Peringatan jika perangkat sudah dipakai
+                    if(!confirm(`Perangkat ini sebelumnya digunakan oleh ${sessionData.name}. Apakah Anda ingin melanjutkan login baru dengan nama ${name}?`)) {
+                        return;
+                    }
+                }
+
+                // --- 2. DETEKSI DUPLIKAT DI DATABASE (SERVER SIDE CHECK) ---
+                const submitBtn = e.target.querySelector('button');
+                const oldText = submitBtn.innerText;
+                submitBtn.disabled = true;
+                submitBtn.innerText = "Memeriksa Data...";
+
+                // Kita fetch data ujian untuk mengecek apakah siswa ini sudah ada
+                const qSnap = await getDocs(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'));
+                let isDuplicate = false;
+                qSnap.forEach(doc => {
+                    const d = doc.data();
+                    // Cek kesamaan Nama dan Kelas (Case insensitive untuk nama)
+                    if (d.studentName.toLowerCase() === name.toLowerCase() && d.className === cls) {
+                        // Opsional: Boleh login ulang kalau statusnya DISKUALIFIKASI atau error tertentu, 
+                        // tapi defaultnya kita blokir untuk keamanan maksimal.
+                        isDuplicate = true;
+                    }
+                });
+
+                if (isDuplicate) {
+                    alert(`⛔ AKSES DITOLAK\n\nSiswa atas nama "${name}" di kelas "${cls}" tercatat sedang atau sudah mengerjakan ujian.\n\nLogin berulang tidak diperbolehkan. Hubungi pengawas jika ini kesalahan.`);
+                    submitBtn.disabled = false;
+                    submitBtn.innerText = oldText;
+                    return;
+                }
+
+                // Jika lolos pengecekan, lanjutkan...
                 let dbQuestions = window.allQuestionsDB.filter(q => q.packet === pkt);
                 
                 if (dbQuestions.length === 0) {
@@ -899,7 +936,10 @@
                     status: "SEDANG MENGERJAKAN",
                     violations: 0
                 };
-                window.saveExamStart(startData); // CALL THE NEW FUNCTION
+                await window.saveExamStart(startData); 
+
+                submitBtn.disabled = false;
+                submitBtn.innerText = oldText;
 
                 currentQuestionIndex = 0;
                 renderQuestion();
@@ -921,6 +961,11 @@
             } catch(error) {
                 console.error(error);
                 alert("Gagal memulai ujian: " + error.message);
+                const submitBtn = e.target.querySelector('button');
+                if(submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.innerText = "MULAI UJIAN";
+                }
             }
         };
 
@@ -1230,6 +1275,12 @@
             };
 
             if(window.saveExamResult) window.saveExamResult(resultData);
+
+            // --- TANDAI PERANGKAT SUDAH SELESAI ---
+            localStorage.setItem('ukktkj_session_done', JSON.stringify({
+                name: currentStudent.name,
+                date: new Date().toISOString()
+            }));
 
             const resultIcon = document.getElementById('result-icon-container');
             const resultTitle = document.getElementById('result-title');
