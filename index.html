@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Try Out Mandiri UKK TKJ</title>
     
-    <!-- Script Penangkap Error (Paling Atas) -->
     <script>
         window.onerror = function(message, source, lineno, colno, error) {
             if(message.includes("ResizeObserver")) return;
@@ -23,13 +22,14 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, addDoc, onSnapshot, query, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, getDocs, doc, updateDoc, deleteDoc, setDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         window.db = null;
         window.auth = null;
         window.appId = 'ukktkj'; 
         window.isFirebaseReady = false;
-        window.currentExamToken = "TKJ2025"; // Default Token jika db kosong
+        window.currentExamToken = "TKJ2025"; 
+        window.allQuestionsDB = []; // Global store for questions from DB
 
         async function initFirebase() {
             try {
@@ -79,8 +79,8 @@
                 console.log("Firebase Connected");
                 updateConnectionStatus(true, "Terhubung ke Server");
                 
-                // Start Listener for Token immediately (for everyone)
                 listenForToken();
+                listenForQuestions(); // Listen for questions immediately
                 
                 if (window.currentUserRole === 'teacher') {
                     setupRealtimeListener();
@@ -104,7 +104,7 @@
 
         initFirebase();
 
-        // Listen for Token Changes
+        // Listeners
         function listenForToken() {
             if (!window.db) return;
             const q = query(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'app_settings'));
@@ -117,11 +117,27 @@
                         window.currentExamToken = data.token;
                     }
                 });
-                console.log("Token Updated:", window.currentExamToken);
-                // Update Teacher UI if active
                 const teacherInput = document.getElementById('teacher-token-input');
                 if(teacherInput && document.activeElement !== teacherInput) {
                     teacherInput.value = window.currentExamToken;
+                }
+            });
+        }
+
+        function listenForQuestions() {
+            if (!window.db) return;
+            // Rule 2: No complex queries. Fetch all questions and filter in memory.
+            const q = query(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'questions'));
+            onSnapshot(q, (snapshot) => {
+                window.allQuestionsDB = [];
+                snapshot.forEach((doc) => {
+                    window.allQuestionsDB.push({ id: doc.id, ...doc.data() });
+                });
+                console.log(`Loaded ${window.allQuestionsDB.length} questions from DB`);
+                
+                // If dashboard is open, refresh the question table
+                if (typeof window.filterQuestionBank === 'function' && !document.getElementById('section-dashboard').classList.contains('hidden-section')) {
+                    window.filterQuestionBank();
                 }
             });
         }
@@ -130,34 +146,147 @@
             if (window.isFirebaseReady && window.db) {
                 try {
                     await addDoc(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'), data);
-                    console.log("Data saved to cloud");
                 } catch (e) {
                     console.error("Failed save", e);
                     if (e.code === 'permission-denied') alert("⚠️ GAGAL MENYIMPAN: Periksa Firestore Rules.");
-                    else alert("Gagal menyimpan ke database pusat. Cek internet.");
+                    else alert("Gagal menyimpan ke database pusat.");
                 }
-            } else {
-                alert("Mode Offline: Data hanya tampil di layar ini.");
             }
         }
 
-        // Teacher: Save New Token
         window.saveToken = async () => {
             const newToken = document.getElementById('teacher-token-input').value.trim().toUpperCase();
             if(!newToken) return alert("Token tidak boleh kosong!");
-            
             if (window.isFirebaseReady && window.db) {
-                try {
-                    await addDoc(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'app_settings'), {
-                        token: newToken,
-                        timestamp: Date.now()
+                await addDoc(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'app_settings'), {
+                    token: newToken,
+                    timestamp: Date.now()
+                });
+                alert("Token berhasil disimpan!");
+            }
+        };
+
+        // --- QUESTION DATABASE MANAGEMENT ---
+        
+        window.seedDatabase = async () => {
+            if (!confirm("Apakah Anda yakin ingin mengupload soal bawaan (Hardcoded) ke Database? Ini akan menambah soal ke bank soal yang ada.")) return;
+            
+            const packets = ['A', 'B', 'C'];
+            let count = 0;
+            const btn = document.getElementById('btn-seed-db');
+            if(btn) {
+                btn.disabled = true;
+                btn.innerText = "Sedang Upload...";
+            }
+
+            try {
+                for (const pkt of packets) {
+                    const questions = questionBank[pkt]; // Get from const
+                    for (const q of questions) {
+                        // Check duplicate simply by text to avoid massive dupes if clicked twice
+                        const exists = window.allQuestionsDB.some(dbQ => dbQ.text === q.text && dbQ.packet === pkt);
+                        if (!exists) {
+                            await addDoc(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'questions'), {
+                                packet: pkt,
+                                text: q.text,
+                                options: q.options,
+                                correct: q.correct,
+                                createdAt: Date.now()
+                            });
+                            count++;
+                        }
+                    }
+                }
+                alert(`Berhasil mengupload ${count} soal baru ke database!`);
+            } catch (e) {
+                alert("Gagal upload: " + e.message);
+            } finally {
+                if(btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = `<i data-lucide="upload-cloud" class="w-4 h-4"></i> Upload Soal Bawaan ke DB`;
+                    if(typeof lucide !== 'undefined') lucide.createIcons();
+                }
+            }
+        };
+
+        window.deleteQuestion = async (id) => {
+            if(!confirm("Hapus soal ini?")) return;
+            try {
+                await deleteDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'questions', id));
+            } catch(e) { alert("Gagal hapus: " + e.message); }
+        };
+
+        window.openQuestionModal = (id = null) => {
+            const modal = document.getElementById('modal-question');
+            const form = document.getElementById('form-question');
+            form.reset();
+            document.getElementById('q-id').value = id || '';
+            
+            if (id) {
+                const q = window.allQuestionsDB.find(x => x.id === id);
+                if (q) {
+                    document.getElementById('q-packet').value = q.packet;
+                    document.getElementById('q-text').value = q.text;
+                    document.getElementById('q-correct').value = q.correct;
+                    // Handle dynamic options
+                    const optsContainer = document.getElementById('q-options-container');
+                    optsContainer.innerHTML = '';
+                    q.options.forEach((opt, idx) => {
+                        addOptionInput(opt);
                     });
-                    alert("Token berhasil disimpan!");
-                } catch (e) {
-                    alert("Gagal menyimpan token: " + e.message);
                 }
             } else {
-                alert("Database belum siap.");
+                // Default 5 empty options
+                const optsContainer = document.getElementById('q-options-container');
+                optsContainer.innerHTML = '';
+                for(let i=0; i<5; i++) addOptionInput('');
+            }
+            
+            modal.classList.remove('hidden');
+        };
+
+        window.closeQuestionModal = () => {
+            document.getElementById('modal-question').classList.add('hidden');
+        };
+
+        window.addOptionInput = (value = '') => {
+            const container = document.getElementById('q-options-container');
+            const idx = container.children.length;
+            const div = document.createElement('div');
+            div.className = "flex gap-2 mb-2";
+            div.innerHTML = `
+                <span class="py-2 px-3 bg-gray-100 border rounded text-gray-500 font-mono">${idx}</span>
+                <input type="text" name="options[]" value="${value}" class="flex-1 px-3 py-2 border rounded outline-none focus:ring-1 focus:ring-blue-500" placeholder="Pilihan Jawaban" required>
+                <button type="button" onclick="this.parentElement.remove()" class="text-red-500 hover:bg-red-50 p-2 rounded"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+            `;
+            container.appendChild(div);
+            if(typeof lucide !== 'undefined') lucide.createIcons();
+        };
+
+        window.saveQuestionSubmit = async (e) => {
+            e.preventDefault();
+            const id = document.getElementById('q-id').value;
+            const packet = document.getElementById('q-packet').value;
+            const text = document.getElementById('q-text').value;
+            const correct = parseInt(document.getElementById('q-correct').value);
+            
+            // Collect options
+            const inputs = document.getElementsByName('options[]');
+            const options = [];
+            for(let input of inputs) options.push(input.value);
+
+            const data = { packet, text, options, correct, updatedAt: Date.now() };
+
+            try {
+                if (id) {
+                    await updateDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'questions', id), data);
+                } else {
+                    data.createdAt = Date.now();
+                    await addDoc(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'questions'), data);
+                }
+                window.closeQuestionModal();
+            } catch (err) {
+                alert("Gagal menyimpan: " + err.message);
             }
         };
 
@@ -166,8 +295,6 @@
                 setTimeout(window.setupRealtimeListener, 1000);
                 return;
             }
-            
-            // Listen Exam Results
             const q = query(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'));
             onSnapshot(q, (snapshot) => {
                 const results = [];
@@ -182,28 +309,17 @@
 
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
-        
         body { font-family: 'Inter', sans-serif; background-color: #f1f5f9; user-select: none; }
         .hidden-section { display: none !important; }
-        
         ::-webkit-scrollbar { width: 8px; }
         ::-webkit-scrollbar-track { background: #f1f1f1; }
         ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
-        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
-        
         .no-copy { user-select: none; -webkit-user-select: none; }
-
         #exam-sidebar { transition: transform 0.3s ease-in-out; }
         .sidebar-closed { transform: translateX(100%); }
         .sidebar-open { transform: translateX(0); }
-
         .animate-fade-in { animation: fadeIn 0.5s ease-out; }
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        /* Modal Animation */
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         #modal-confirm { transition: opacity 0.2s ease-out; }
         #modal-confirm.show { opacity: 1; }
         #modal-content { transition: transform 0.2s ease-out; }
@@ -219,19 +335,16 @@
                 <div class="absolute top-4 right-4">
                     <span id="connection-status" class="text-xs font-bold text-yellow-200 bg-yellow-900/30 px-2 py-1 rounded-full border border-yellow-500/50">Memuat...</span>
                 </div>
-
                 <h1 class="text-2xl font-bold text-white flex flex-col items-center justify-center gap-2 mt-2">
                     <img src="images/logotkj.png" onerror="this.src='https://via.placeholder.com/150?text=Logo+TKJ'" alt="Logo TKJ" class="w-20 h-20 object-contain mb-2 bg-white rounded-full p-1">
                     Try Out Mandiri UKK TKJ
                 </h1>
                 <p class="text-blue-100 text-sm mt-1">Ujian Kompetensi Keahlian</p>
             </div>
-            
             <div class="flex border-b">
                 <button id="tab-student" onclick="window.switchLoginTab('student')" class="flex-1 py-3 text-sm font-medium text-blue-600 border-b-2 border-blue-600 bg-blue-50 transition-colors">Login Siswa</button>
                 <button id="tab-teacher" onclick="window.switchLoginTab('teacher')" class="flex-1 py-3 text-sm font-medium text-gray-500 hover:text-gray-700 transition-colors">Login Guru</button>
             </div>
-
             <div class="p-8">
                 <form id="form-student" onsubmit="window.handleStudentLogin(event)" class="space-y-4">
                     <div>
@@ -256,7 +369,6 @@
                         </div>
                         <input type="hidden" id="selected-packet" value="A">
                     </div>
-                    <!-- TOKEN INPUT -->
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Token Ujian</label>
                         <input type="text" id="student-token" required class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none uppercase font-mono tracking-widest text-center bg-gray-50" placeholder="MASUKKAN TOKEN">
@@ -264,7 +376,6 @@
                     </div>
                     <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg shadow-lg mt-2 transform transition hover:scale-[1.02]">MULAI UJIAN</button>
                 </form>
-
                 <form id="form-teacher" onsubmit="window.handleTeacherLogin(event)" class="space-y-4 hidden-section">
                     <input type="text" id="teacher-user" placeholder="Username" class="w-full px-4 py-2 border rounded-lg outline-none">
                     <input type="password" id="teacher-pass" placeholder="Password" class="w-full px-4 py-2 border rounded-lg outline-none">
@@ -285,38 +396,30 @@
                         <p class="text-xs text-gray-500" id="header-detail">Kelas • Paket A</p>
                     </div>
                 </div>
-                
                 <div class="flex items-center gap-2">
                     <div id="timer-box" class="flex items-center gap-2 px-4 py-2 rounded-lg font-mono font-bold text-lg bg-blue-50 text-blue-600">
                         <i data-lucide="clock" class="w-5 h-5"></i> <span id="timer-display">60:00</span>
                     </div>
-                    
                     <button onclick="window.toggleSidebar()" class="ml-2 p-2 rounded-lg hover:bg-slate-100 border border-slate-200 text-slate-700 flex items-center gap-2">
-                        <i data-lucide="grid-3x3" class="w-5 h-5"></i> 
-                        <span class="hidden md:inline text-sm font-semibold">Daftar Soal</span>
+                        <i data-lucide="grid-3x3" class="w-5 h-5"></i> <span class="hidden md:inline text-sm font-semibold">Daftar Soal</span>
                     </button>
                 </div>
             </div>
         </header>
-
         <main class="flex-1 w-full max-w-4xl mx-auto p-4 md:p-8 flex flex-col h-[calc(100vh-64px)] overflow-y-auto">
             <div id="question-area" class="flex-1"></div>
-            
             <div class="mt-6 pt-4 border-t flex justify-between items-center bg-slate-100 sticky bottom-0 z-20 pb-4">
                 <button id="btn-prev" onclick="window.changeQuestion(-1)" class="px-6 py-2 rounded-lg font-semibold bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed">
                     <i data-lucide="chevron-left" class="w-4 h-4 inline mr-1"></i> Sebelumnya
                 </button>
-                
                 <button id="btn-next" onclick="window.changeQuestion(1)" class="px-6 py-2 rounded-lg font-semibold bg-blue-600 text-white hover:bg-blue-700 shadow-sm flex items-center">
                     Selanjutnya <i data-lucide="chevron-right" class="w-4 h-4 inline ml-1"></i>
                 </button>
-
                  <button id="btn-finish-main" onclick="window.confirmFinishExam()" class="hidden px-6 py-2 rounded-lg font-semibold bg-green-600 text-white hover:bg-green-700 shadow-sm flex items-center gap-2">
                     <i data-lucide="check-circle" class="w-4 h-4"></i> Selesai
                 </button>
             </div>
         </main>
-
         <div id="exam-sidebar" class="fixed top-16 right-0 bottom-0 w-80 bg-white shadow-2xl border-l border-slate-200 z-40 sidebar-closed flex flex-col">
             <div class="p-4 border-b bg-slate-50 flex justify-between items-center">
                 <h3 class="font-bold text-gray-800">Navigasi Soal</h3>
@@ -324,11 +427,9 @@
                     <i data-lucide="x" class="w-5 h-5"></i>
                 </button>
             </div>
-            
             <div class="p-4 overflow-y-auto flex-1">
                 <div id="question-grid" class="grid grid-cols-5 gap-3"></div>
             </div>
-
             <div class="p-4 border-t bg-slate-50">
                 <div class="flex gap-2 text-xs mb-4 justify-center">
                     <div class="flex items-center gap-1"><div class="w-3 h-3 bg-green-500 rounded-full"></div> Dijawab</div>
@@ -340,11 +441,10 @@
                 </button>
             </div>
         </div>
-        
         <div id="sidebar-overlay" onclick="window.toggleSidebar()" class="fixed inset-0 bg-black/20 z-30 hidden" style="top: 64px;"></div>
     </div>
 
-    <!-- MODAL CONFIRMATION (NEW) -->
+    <!-- MODAL CONFIRMATION -->
     <div id="modal-confirm" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm hidden opacity-0 transition-opacity duration-300">
         <div class="bg-white rounded-2xl shadow-2xl p-6 max-w-sm w-full mx-4 transform scale-90 transition-transform duration-300" id="modal-content">
             <div class="text-center">
@@ -361,88 +461,180 @@
         </div>
     </div>
 
+    <!-- MODAL ADD/EDIT QUESTION -->
+    <div id="modal-question" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm hidden">
+        <div class="bg-white rounded-xl shadow-2xl p-6 max-w-2xl w-full mx-4 overflow-y-auto max-h-[90vh]">
+            <div class="flex justify-between items-center mb-4 border-b pb-2">
+                <h3 class="text-xl font-bold text-gray-800">Editor Soal</h3>
+                <button onclick="window.closeQuestionModal()" class="text-gray-500 hover:text-gray-700"><i data-lucide="x" class="w-6 h-6"></i></button>
+            </div>
+            <form id="form-question" onsubmit="window.saveQuestionSubmit(event)">
+                <input type="hidden" id="q-id">
+                <div class="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Paket Soal</label>
+                        <select id="q-packet" class="w-full px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="A">Paket A</option>
+                            <option value="B">Paket B</option>
+                            <option value="C">Paket C</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Kunci Jawaban (Index 0-4)</label>
+                        <input type="number" id="q-correct" min="0" max="4" class="w-full px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-blue-500" required>
+                    </div>
+                </div>
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Pertanyaan</label>
+                    <textarea id="q-text" rows="3" class="w-full px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-blue-500" required></textarea>
+                </div>
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Pilihan Jawaban</label>
+                    <div id="q-options-container">
+                        <!-- Dynamic Inputs -->
+                    </div>
+                    <button type="button" onclick="window.addOptionInput()" class="mt-2 text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1">+ Tambah Opsi</button>
+                </div>
+                <div class="flex justify-end gap-2 pt-4 border-t">
+                    <button type="button" onclick="window.closeQuestionModal()" class="px-4 py-2 border rounded-lg text-gray-700 hover:bg-gray-50">Batal</button>
+                    <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-bold">Simpan Soal</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- SECTION: DASHBOARD GURU -->
     <div id="section-dashboard" class="hidden-section min-h-screen bg-slate-50 flex flex-col">
         <header class="bg-slate-900 text-white shadow-lg">
             <div class="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
                 <div class="flex items-center gap-3">
                     <div class="bg-blue-500 p-2 rounded-lg"><i data-lucide="monitor" class="w-6 h-6 text-white"></i></div>
-                    <div><h1 class="font-bold text-lg">Panel Guru / Admin</h1><p class="text-xs text-slate-400">Monitoring Real-time</p></div>
+                    <div><h1 class="font-bold text-lg">Panel Guru / Admin</h1><p class="text-xs text-slate-400">Monitoring & Bank Soal</p></div>
                 </div>
                 <button onclick="window.logout()" class="text-slate-300 hover:text-white flex items-center gap-2 text-sm"><i data-lucide="log-out" class="w-4 h-4"></i> Keluar</button>
             </div>
         </header>
         <main class="flex-1 max-w-7xl mx-auto w-full p-6">
             
-            <!-- TOKEN SETTING PANEL -->
-            <div class="bg-white rounded-xl shadow-sm border p-6 mb-6">
-                <h2 class="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2"><i data-lucide="key" class="w-5 h-5 text-yellow-500"></i> Pengaturan Token</h2>
-                <div class="flex flex-col md:flex-row items-center gap-4">
-                    <div class="flex-1 w-full">
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Token Ujian Saat Ini</label>
-                        <div class="flex gap-2">
-                            <input type="text" id="teacher-token-input" class="w-full px-4 py-2 border rounded-lg font-mono text-xl font-bold tracking-widest text-center uppercase text-blue-600 bg-gray-50" placeholder="LOADING..." value="TKJ2025">
-                            <button onclick="window.saveToken()" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-bold shadow-md active:scale-95 transition-transform">Simpan</button>
+            <!-- TABS DASHBOARD -->
+            <div class="flex gap-4 mb-6 border-b">
+                <button onclick="window.switchDashTab('nilai')" id="tab-dash-nilai" class="pb-3 border-b-2 border-blue-600 font-bold text-blue-600 px-4">Monitoring Nilai</button>
+                <button onclick="window.switchDashTab('soal')" id="tab-dash-soal" class="pb-3 border-b-2 border-transparent text-gray-500 hover:text-gray-700 font-bold px-4">Bank Soal (Database)</button>
+            </div>
+
+            <!-- PANEL 1: MONITORING NILAI -->
+            <div id="panel-nilai">
+                <div class="bg-white rounded-xl shadow-sm border p-6 mb-6">
+                    <h2 class="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2"><i data-lucide="key" class="w-5 h-5 text-yellow-500"></i> Pengaturan Token</h2>
+                    <div class="flex flex-col md:flex-row items-center gap-4">
+                        <div class="flex-1 w-full">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Token Ujian Saat Ini</label>
+                            <div class="flex gap-2">
+                                <input type="text" id="teacher-token-input" class="w-full px-4 py-2 border rounded-lg font-mono text-xl font-bold tracking-widest text-center uppercase text-blue-600 bg-gray-50" placeholder="LOADING..." value="TKJ2025">
+                                <button onclick="window.saveToken()" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-bold shadow-md active:scale-95 transition-transform">Simpan</button>
+                            </div>
+                        </div>
+                        <div class="p-4 bg-blue-50 rounded-lg border border-blue-100 text-sm text-blue-800 md:max-w-sm">
+                            <p class="flex gap-2"><i data-lucide="info" class="w-4 h-4 mt-0.5"></i> <span>Token ini harus dimasukkan siswa agar bisa login. Ganti token secara berkala untuk keamanan.</span></p>
                         </div>
                     </div>
-                    <div class="p-4 bg-blue-50 rounded-lg border border-blue-100 text-sm text-blue-800 md:max-w-sm">
-                        <p class="flex gap-2"><i data-lucide="info" class="w-4 h-4 mt-0.5"></i> <span>Token ini harus dimasukkan siswa agar bisa login. Ganti token secara berkala untuk keamanan.</span></p>
+                </div>
+
+                <div class="bg-white rounded-xl shadow-sm border overflow-hidden">
+                    <div class="p-6 border-b flex flex-col gap-4">
+                        <div class="flex justify-between items-center">
+                            <h2 class="text-lg font-bold text-gray-800">Filter Data Hasil Ujian</h2>
+                            <button onclick="window.exportToCSV()" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 shadow-sm transition hover:scale-105"><i data-lucide="download" class="w-4 h-4"></i> Export Data Terpilih</button>
+                        </div>
+                        
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-3 bg-gray-50 p-4 rounded-lg border border-gray-200">
+                            <div>
+                                <label class="block text-xs font-semibold text-gray-500 mb-1">Paket Soal</label>
+                                <select id="filter-session" onchange="window.filterDashboard()" class="w-full px-3 py-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 outline-none">
+                                    <option value="all">Semua Paket</option>
+                                    <option value="A">Paket A</option>
+                                    <option value="B">Paket B</option>
+                                    <option value="C">Paket C</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-gray-500 mb-1">Kelas</label>
+                                <select id="filter-class" onchange="window.filterDashboard()" class="w-full px-3 py-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 outline-none">
+                                    <option value="all">Semua Kelas</option>
+                                    <option value="XII TKJ 1">XII TKJ 1</option>
+                                    <option value="XII TKJ 2">XII TKJ 2</option>
+                                    <option value="XII TKJ 3">XII TKJ 3</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-gray-500 mb-1">Tanggal Ujian</label>
+                                <input type="date" id="filter-date" onchange="window.filterDashboard()" class="w-full px-3 py-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 outline-none">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left text-sm text-gray-600">
+                            <thead class="bg-gray-50 text-gray-900 font-semibold border-b">
+                                <tr>
+                                    <th class="px-6 py-4">Waktu</th>
+                                    <th class="px-6 py-4">Nama Siswa</th>
+                                    <th class="px-6 py-4">Kelas</th>
+                                    <th class="px-6 py-4">Paket</th>
+                                    <th class="px-6 py-4 text-center">Nilai</th>
+                                    <th class="px-6 py-4">Status</th>
+                                    <th class="px-6 py-4 text-center">Pelanggaran</th>
+                                </tr>
+                            </thead>
+                            <tbody id="dashboard-table-body" class="divide-y divide-gray-100">
+                                <tr><td colspan="7" class="px-6 py-12 text-center text-gray-400">Menunggu data ujian...</td></tr>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             </div>
 
-            <div class="bg-white rounded-xl shadow-sm border overflow-hidden">
-                <div class="p-6 border-b flex flex-col gap-4">
-                    <div class="flex justify-between items-center">
-                        <h2 class="text-lg font-bold text-gray-800">Filter Data Hasil Ujian</h2>
-                        <button onclick="window.exportToCSV()" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 shadow-sm transition hover:scale-105"><i data-lucide="download" class="w-4 h-4"></i> Export Data Terpilih</button>
-                    </div>
-                    
-                    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 bg-gray-50 p-4 rounded-lg border border-gray-200">
+            <!-- PANEL 2: MANAJEMEN SOAL (BANK SOAL) -->
+            <div id="panel-soal" class="hidden-section">
+                <div class="bg-white rounded-xl shadow-sm border p-6 mb-6">
+                    <div class="flex flex-col md:flex-row justify-between items-center gap-4 mb-6">
                         <div>
-                            <label class="block text-xs font-semibold text-gray-500 mb-1">Paket Soal</label>
-                            <select id="filter-session" onchange="window.filterDashboard()" class="w-full px-3 py-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 outline-none">
-                                <option value="all">Semua Paket</option>
-                                <option value="A">Paket A</option>
-                                <option value="B">Paket B</option>
-                                <option value="C">Paket C</option>
-                            </select>
+                            <h2 class="text-xl font-bold text-gray-800">Bank Soal Database</h2>
+                            <p class="text-gray-500 text-sm">Kelola soal untuk Paket A, B, dan C secara real-time.</p>
                         </div>
-                        <div>
-                            <label class="block text-xs font-semibold text-gray-500 mb-1">Kelas</label>
-                            <select id="filter-class" onchange="window.filterDashboard()" class="w-full px-3 py-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 outline-none">
-                                <option value="all">Semua Kelas</option>
-                                <option value="XII TKJ 1">XII TKJ 1</option>
-                                <option value="XII TKJ 2">XII TKJ 2</option>
-                                <option value="XII TKJ 3">XII TKJ 3</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label class="block text-xs font-semibold text-gray-500 mb-1">Tanggal Ujian</label>
-                            <input type="date" id="filter-date" onchange="window.filterDashboard()" class="w-full px-3 py-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 outline-none">
+                        <div class="flex gap-2">
+                            <button id="btn-seed-db" onclick="window.seedDatabase()" class="bg-gray-800 hover:bg-gray-900 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2"><i data-lucide="upload-cloud" class="w-4 h-4"></i> Upload Soal Bawaan ke DB</button>
+                            <button onclick="window.openQuestionModal()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2"><i data-lucide="plus" class="w-4 h-4"></i> Tambah Soal Baru</button>
                         </div>
                     </div>
-                </div>
-                
-                <div class="overflow-x-auto">
-                    <table class="w-full text-left text-sm text-gray-600">
-                        <thead class="bg-gray-50 text-gray-900 font-semibold border-b">
-                            <tr>
-                                <th class="px-6 py-4">Waktu</th>
-                                <th class="px-6 py-4">Nama Siswa</th>
-                                <th class="px-6 py-4">Kelas</th>
-                                <th class="px-6 py-4">Paket</th>
-                                <th class="px-6 py-4 text-center">Nilai</th>
-                                <th class="px-6 py-4">Status</th>
-                                <th class="px-6 py-4 text-center">Pelanggaran</th>
-                            </tr>
-                        </thead>
-                        <tbody id="dashboard-table-body" class="divide-y divide-gray-100">
-                            <tr><td colspan="7" class="px-6 py-12 text-center text-gray-400">Menunggu data ujian...</td></tr>
-                        </tbody>
-                    </table>
+
+                    <div class="mb-4">
+                        <label class="block text-xs font-semibold text-gray-500 mb-1">Filter Paket Soal</label>
+                        <select id="filter-bank-packet" onchange="window.filterQuestionBank()" class="w-full md:w-64 px-3 py-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 outline-none">
+                            <option value="all">Semua Paket</option>
+                            <option value="A">Paket A</option>
+                            <option value="B">Paket B</option>
+                            <option value="C">Paket C</option>
+                        </select>
+                    </div>
+
+                    <div class="overflow-x-auto border rounded-lg">
+                        <table class="w-full text-left text-sm text-gray-600">
+                            <thead class="bg-gray-50 text-gray-900 font-semibold border-b">
+                                <tr>
+                                    <th class="px-4 py-3 w-16">Paket</th>
+                                    <th class="px-4 py-3">Pertanyaan</th>
+                                    <th class="px-4 py-3 w-32 text-center">Aksi</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bank-soal-body" class="divide-y divide-gray-100">
+                                <tr><td colspan="3" class="px-6 py-8 text-center text-gray-400">Memuat soal dari database...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
+
         </main>
     </div>
 
@@ -450,33 +642,25 @@
     <div id="section-result" class="hidden-section min-h-screen bg-slate-900 flex flex-col items-center justify-start pt-10 p-4 overflow-y-auto">
         <div class="bg-white rounded-2xl shadow-2xl p-8 max-w-2xl w-full text-center relative mb-8">
             <div id="result-icon-container" class="w-20 h-20 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-6"><i data-lucide="check-circle" class="w-10 h-10"></i></div>
-            
             <h2 id="result-title" class="text-2xl font-bold text-gray-800 mb-2">Ujian Selesai!</h2>
             <p id="result-message" class="text-gray-500 mb-6">Jawaban telah terkirim ke server.</p>
-            
             <div class="bg-slate-50 rounded-xl p-6 mb-4 border border-slate-200">
                 <p class="text-sm text-gray-500 uppercase tracking-wider font-semibold mb-1">Nilai Anda</p>
                 <p id="final-score-display" class="text-5xl font-extrabold text-blue-600">0</p>
             </div>
-            
             <div id="motivational-message" class="mb-6 px-4 py-3 rounded-lg font-bold text-sm md:text-base border-l-4"></div>
-
             <div class="flex flex-col gap-3">
                 <button onclick="window.toggleReview()" id="btn-review" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition-transform active:scale-95">
                     <i data-lucide="book-open" class="w-5 h-5"></i> Lihat Pembahasan
                 </button>
-                <button onclick="location.reload()" class="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold py-3 rounded-lg transition-transform active:scale-95">
-                    Kembali ke Login
-                </button>
+                <button onclick="location.reload()" class="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold py-3 rounded-lg transition-transform active:scale-95">Kembali ke Login</button>
             </div>
         </div>
-
         <div id="review-container" class="w-full max-w-2xl bg-white rounded-2xl shadow-xl p-6 hidden mb-10">
             <h3 class="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2 border-b pb-2">
                 <i data-lucide="file-check" class="w-6 h-6 text-blue-600"></i> Pembahasan Soal
             </h3>
             <div id="review-list" class="space-y-6"></div>
-            <!-- EXIT BUTTON AFTER REVIEW -->
             <div class="mt-8 pt-6 border-t border-gray-100">
                 <button onclick="location.reload()" class="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold py-3 rounded-lg shadow-md flex items-center justify-center gap-2 transition-transform active:scale-95">
                     <i data-lucide="log-out" class="w-5 h-5"></i> Selesai Belajar & Keluar
@@ -487,7 +671,7 @@
 
     <!-- LOGIC SCRIPT -->
     <script>
-        // --- DATA SOAL ---
+        // --- DATA SOAL STATIC (FALLBACK & SEED) ---
         const questionBank = {
             A: [
                 { id: 1, text: "Standar Wi-Fi mana yang beroperasi pada frekuensi 2.4 GHz dengan kecepatan hingga 54 Mbps?", options: ["802.11a", "802.11b", "802.11g", "802.11ac", "802.11ax"], correct: 2 },
@@ -500,7 +684,6 @@
                 { id: 8, text: "Jenis kabel yang terdiri dari 4 pasang urat dipilin dan memiliki pelindung metalik adalah...", options: ["UTP", "STP", "Fiber Optik", "Coaxial", "VGA"], correct: 1 },
                 { id: 9, text: "Alat apakah yang digunakan untuk memasang konektor RJ-45 pada ujung kabel UTP?", options: ["Wire Stripper", "Multimeter", "Crimping Tool", "Cable Tester", "Obeng"], correct: 2 },
                 { id: 10, text: "Fungsi router yang mengubah IP privat menjadi IP publik saat mengakses internet adalah...", options: ["Routing", "Monitoring", "DHCP", "NAT", "Printing"], correct: 3 },
-                
                 { id: 11, text: "Kabel UTP Kategori 5e masih mampu mendukung kecepatan transmisi data hingga 1 Gbps.", options: ["TRUE", "FALSE"], correct: 0 },
                 { id: 12, text: "Standar Wi-Fi 802.11ac hanya beroperasi pada frekuensi 2.4 GHz.", options: ["TRUE", "FALSE"], correct: 1 },
                 { id: 13, text: "MAC Address dari sebuah perangkat jaringan tidak dapat diubah sama sekali, baik melalui hardware maupun software.", options: ["TRUE", "FALSE"], correct: 1 },
@@ -523,7 +706,6 @@
                 { id: 8, text: "Laboratorium jaringan SMK memiliki dua jenis kabel: satu tanpa pelindung metalik dan satunya memiliki lapisan pelindung logam di luarnya. Kabel tanpa pelindung tersebut adalah...", options: ["STP", "Fiber Optik", "UTP", "Coaxial", "VGA Cable"], correct: 2 },
                 { id: 9, text: "Setelah selesai memasang kabel UTP baru dari switch ke beberapa komputer, teknisi ingin memastikan semua koneksi bekerja dengan benar sebelum jaringan dioperasikan. Alat apa yang digunakan untuk memverifikasi koneksi kabel tersebut?", options: ["Crimping Tool", "Wire Stripper", "Multimeter", "Cable Tester", "Obeng Phillips"], correct: 3 },
                 { id: 10, text: "Sebuah jaringan kantor memiliki 50 komputer yang semuanya terhubung ke internet. Saat komputer pertama kali terhubung ke jaringan, ia secara otomatis mendapatkan alamat IP tanpa perlu dikonfigurasi secara manual. Fungsi router manakah yang bertanggung jawab atas pemberian alamat IP tersebut?", options: ["Routing", "NAT", "Monitoring", "Printing", "DHCP"], correct: 4 },
-                
                 { id: 11, text: "Kabel UTP Kategori 6 memiliki kemampuan transmisi yang lebih baik dibandingkan Kategori 5e.", options: ["TRUE", "FALSE"], correct: 0 },
                 { id: 12, text: "Standar Wi-Fi 802.11b beroperasi pada frekuensi 5 GHz.", options: ["TRUE", "FALSE"], correct: 1 },
                 { id: 13, text: "Dua perangkat jaringan tidak boleh memiliki MAC Address yang sama dalam satu jaringan LAN.", options: ["TRUE", "FALSE"], correct: 0 },
@@ -546,7 +728,6 @@
                 { id: 8, text: "Layanan server yang berfungsi menerjemahkan nama domain (seperti google.com) menjadi alamat IP adalah...", options: ["DHCP", "Web Server", "DNS", "FTP", "Proxy"], correct: 2 },
                 { id: 9, text: "Urutan warna kabel UTP standar T568B dari kiri ke kanan (pin 1-8) adalah...", options: ["Putih Hijau, Hijau...", "Putih Orange, Orange, Putih Hijau, Biru, Putih Biru, Hijau, Putih Coklat, Coklat", "Putih Coklat, Coklat...", "Putih Biru, Biru...", "Orange, Putih Orange..."], correct: 1 },
                 { id: 10, text: "Topologi jaringan di mana setiap node terhubung langsung ke satu perangkat pusat (hub/switch) disebut...", options: ["Bus", "Ring", "Mesh", "Star", "Tree"], correct: 3 },
-                
                 { id: 11, text: "Kabel UTP kategori 5 (Cat5) memiliki panjang maksimum standar 100 meter untuk transmisi data yang optimal.", options: ["TRUE", "FALSE"], correct: 0 },
                 { id: 12, text: "Alamat IP 192.168.1.1 adalah contoh dari alamat IP Kelas A.", options: ["TRUE", "FALSE"], correct: 1 },
                 { id: 13, text: "Fiber optik mentransmisikan data menggunakan sinyal cahaya, bukan sinyal listrik.", options: ["TRUE", "FALSE"], correct: 0 },
@@ -601,7 +782,88 @@
             }
         };
 
-        window.handleStudentLogin = function(e) {
+        // --- DASHBOARD UI LOGIC ---
+        window.switchDashTab = function(tab) {
+            const btnNilai = document.getElementById('tab-dash-nilai');
+            const btnSoal = document.getElementById('tab-dash-soal');
+            const pnlNilai = document.getElementById('panel-nilai');
+            const pnlSoal = document.getElementById('panel-soal');
+
+            if (tab === 'nilai') {
+                btnNilai.className = "pb-3 border-b-2 border-blue-600 font-bold text-blue-600 px-4";
+                btnSoal.className = "pb-3 border-b-2 border-transparent text-gray-500 hover:text-gray-700 font-bold px-4";
+                pnlNilai.classList.remove('hidden-section');
+                pnlSoal.classList.add('hidden-section');
+            } else {
+                btnNilai.className = "pb-3 border-b-2 border-transparent text-gray-500 hover:text-gray-700 font-bold px-4";
+                btnSoal.className = "pb-3 border-b-2 border-blue-600 font-bold text-blue-600 px-4";
+                pnlNilai.classList.add('hidden-section');
+                pnlSoal.classList.remove('hidden-section');
+                window.filterQuestionBank(); // Refresh bank list
+            }
+        };
+
+        window.filterQuestionBank = function() {
+            const filter = document.getElementById('filter-bank-packet').value;
+            const tbody = document.getElementById('bank-soal-body');
+            tbody.innerHTML = '';
+
+            const filtered = window.allQuestionsDB.filter(q => filter === 'all' || q.packet === filter);
+            
+            if (filtered.length === 0) {
+                if (window.allQuestionsDB.length === 0) {
+                    // NEW: Better Empty State UI
+                    tbody.innerHTML = `
+                        <tr>
+                            <td colspan="3" class="px-6 py-12 text-center">
+                                <div class="flex flex-col items-center gap-3">
+                                    <div class="p-3 bg-yellow-100 text-yellow-600 rounded-full"><i data-lucide="database" class="w-8 h-8"></i></div>
+                                    <h3 class="text-lg font-bold text-gray-700">Database Kosong</h3>
+                                    <p class="text-gray-500 max-w-md mx-auto">
+                                        Saat ini siswa mengerjakan soal <b>Bawaan (Hardcoded)</b>. 
+                                        Agar bisa diedit/hapus, harap masukkan ke database.
+                                    </p>
+                                    <button onclick="window.seedDatabase()" class="mt-2 bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-bold shadow-md flex items-center gap-2">
+                                        <i data-lucide="upload-cloud" class="w-4 h-4"></i> Masukkan Soal Bawaan ke Database Sekarang
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>`;
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="3" class="px-6 py-12 text-center text-gray-400">Tidak ada soal di paket ini.</td></tr>';
+                }
+                if(typeof lucide !== 'undefined') lucide.createIcons();
+                return;
+            }
+
+            // Sort by createdAt usually better, but packet is grouped
+            filtered.sort((a,b) => (a.createdAt || 0) - (b.createdAt || 0));
+
+            filtered.forEach(q => {
+                const pktColor = q.packet === 'A' ? 'bg-blue-100 text-blue-700' : q.packet === 'B' ? 'bg-purple-100 text-purple-700' : 'bg-orange-100 text-orange-700';
+                
+                const row = `
+                    <tr class="hover:bg-slate-50 border-b last:border-0 group">
+                        <td class="px-4 py-3"><span class="px-2 py-1 rounded text-xs font-bold ${pktColor}">${q.packet}</span></td>
+                        <td class="px-4 py-3">
+                            <p class="text-sm text-gray-800 line-clamp-2 font-medium">${q.text}</p>
+                            <p class="text-xs text-gray-400 mt-1">${q.options.length} Opsi • Kunci: Indeks ${q.correct}</p>
+                        </td>
+                        <td class="px-4 py-3 text-center">
+                            <div class="flex justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button onclick="window.openQuestionModal('${q.id}')" class="p-2 bg-blue-50 text-blue-600 rounded hover:bg-blue-100"><i data-lucide="edit-2" class="w-4 h-4"></i></button>
+                                <button onclick="window.deleteQuestion('${q.id}')" class="p-2 bg-red-50 text-red-600 rounded hover:bg-red-100"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+                tbody.innerHTML += row;
+            });
+            if(typeof lucide !== 'undefined') lucide.createIcons();
+        };
+
+        // --- STUDENT LOGIC MODIFIED ---
+        window.handleStudentLogin = async function(e) {
             e.preventDefault();
             try {
                 const name = document.getElementById('student-name').value.trim();
@@ -614,20 +876,30 @@
                     return;
                 }
 
-                // VALIDASI TOKEN
                 if (tokenInput !== window.currentExamToken) {
                     alert("TOKEN SALAH! Silakan minta token yang benar kepada pengawas.");
                     return;
+                }
+
+                // FETCH QUESTIONS FROM DB
+                let dbQuestions = window.allQuestionsDB.filter(q => q.packet === pkt);
+                
+                // Fallback if DB empty (Robustness)
+                if (dbQuestions.length === 0) {
+                    console.warn("DB Kosong untuk paket ini, menggunakan soal hardcoded.");
+                    if(questionBank[pkt]) {
+                        dbQuestions = [...questionBank[pkt]];
+                    } else {
+                        throw new Error("Paket soal tidak ditemukan di Database maupun Bawaan!");
+                    }
                 }
 
                 currentStudent = { name, cls, pkt };
                 
                 document.getElementById('header-name').innerText = name;
                 document.getElementById('header-detail').innerText = `${cls} • Paket ${pkt}`;
-
-                if (!questionBank[pkt]) throw new Error("Paket soal tidak ditemukan!");
                 
-                currentQuestionList = [...questionBank[pkt]];
+                currentQuestionList = [...dbQuestions];
                 shuffleArray(currentQuestionList);
 
                 currentQuestionIndex = 0;
@@ -636,13 +908,9 @@
 
                 try {
                     const elem = document.documentElement;
-                    if (elem.requestFullscreen) {
-                        elem.requestFullscreen().catch(err => console.log(err));
-                    } else if (elem.webkitRequestFullscreen) {
-                        elem.webkitRequestFullscreen();
-                    } else if (elem.msRequestFullscreen) {
-                        elem.msRequestFullscreen();
-                    }
+                    if (elem.requestFullscreen) elem.requestFullscreen().catch(err => console.log(err));
+                    else if (elem.webkitRequestFullscreen) elem.webkitRequestFullscreen();
+                    else if (elem.msRequestFullscreen) elem.msRequestFullscreen();
                 } catch(err){
                     console.log("Fullscreen aborted or not supported", err);
                 }
@@ -669,7 +937,6 @@
                 document.getElementById('section-login').classList.add('hidden-section');
                 document.getElementById('section-dashboard').classList.remove('hidden-section');
                 
-                // Set input value
                 const teacherInput = document.getElementById('teacher-token-input');
                 if(teacherInput) teacherInput.value = window.currentExamToken;
             } else {
@@ -699,7 +966,6 @@
             }
         };
 
-        // --- NEW MODAL LOGIC ---
         window.confirmFinishExam = function() {
             const answeredCount = Object.keys(userAnswers).length;
             const total = currentQuestionList.length;
@@ -713,7 +979,6 @@
             
             const modal = document.getElementById('modal-confirm');
             modal.classList.remove('hidden');
-            // Sedikit delay biar transisi opacity jalan
             setTimeout(() => {
                 modal.classList.add('show');
             }, 10);
