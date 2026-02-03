@@ -25,13 +25,26 @@
         import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, addDoc, onSnapshot, query, getDocs, doc, updateDoc, deleteDoc, setDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
+        // --- FIX: EXPOSE FIREBASE FUNCTIONS TO GLOBAL SCOPE ---
+        // Kita tempelkan ke window agar bisa diakses oleh script biasa di bawah
+        window.getDocs = getDocs;
+        window.collection = collection;
+        window.addDoc = addDoc;
+        window.onSnapshot = onSnapshot;
+        window.query = query;
+        window.doc = doc;
+        window.updateDoc = updateDoc;
+        window.deleteDoc = deleteDoc;
+        window.setDoc = setDoc;
+        // -----------------------------------------------------
+
         window.db = null;
         window.auth = null;
         window.appId = 'ukktkj'; 
         window.isFirebaseReady = false;
         window.currentExamToken = "TKJ2025"; 
         window.allQuestionsDB = []; 
-        window.currentExamDocId = null; // ID dokumen ujian siswa saat ini
+        window.currentExamDocId = null; 
 
         async function initFirebase() {
             try {
@@ -106,7 +119,7 @@
 
         initFirebase();
 
-        // Listeners
+        // Listeners (Ini aman karena ada di dalam module scope)
         function listenForToken() {
             if (!window.db) return;
             const q = query(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'app_settings'));
@@ -143,11 +156,12 @@
         }
 
         // --- NEW: START EXAM LOG (Create Document) ---
+        // FIX: Gunakan window.addDoc, window.collection secara eksplisit
         window.saveExamStart = async (data) => {
             if (window.isFirebaseReady && window.db) {
                 try {
-                    const docRef = await addDoc(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'), data);
-                    window.currentExamDocId = docRef.id; // Simpan ID untuk update nanti
+                    const docRef = await window.addDoc(window.collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'), data);
+                    window.currentExamDocId = docRef.id; 
                     console.log("Exam started, doc created:", window.currentExamDocId);
                 } catch (e) {
                     console.error("Failed to log start", e);
@@ -156,16 +170,15 @@
         }
 
         // --- MODIFIED: SAVE RESULT (Update or Create) ---
+        // FIX: Gunakan window.* secara eksplisit
         window.saveExamResult = async (data) => {
             if (window.isFirebaseReady && window.db) {
                 try {
                     if (window.currentExamDocId) {
-                        // Update dokumen yang sudah ada (biar status berubah dari 'Sedang Mengerjakan' ke 'Selesai')
-                        await updateDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results', window.currentExamDocId), data);
+                        await window.updateDoc(window.doc(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results', window.currentExamDocId), data);
                         console.log("Data updated in cloud");
                     } else {
-                        // Fallback jika ID hilang (misal refresh), buat baru
-                        await addDoc(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'), data);
+                        await window.addDoc(window.collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'), data);
                         console.log("Data saved new to cloud");
                     }
                 } catch (e) {
@@ -180,7 +193,7 @@
             const newToken = document.getElementById('teacher-token-input').value.trim().toUpperCase();
             if(!newToken) return alert("Token tidak boleh kosong!");
             if (window.isFirebaseReady && window.db) {
-                await addDoc(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'app_settings'), {
+                await window.addDoc(window.collection(window.db, 'artifacts', window.appId, 'public', 'data', 'app_settings'), {
                     token: newToken,
                     timestamp: Date.now()
                 });
@@ -201,7 +214,7 @@
                     for (const q of questions) {
                         const exists = window.allQuestionsDB.some(dbQ => dbQ.text === q.text && dbQ.packet === pkt);
                         if (!exists) {
-                            await addDoc(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'questions'), {
+                            await window.addDoc(window.collection(window.db, 'artifacts', window.appId, 'public', 'data', 'questions'), {
                                 packet: pkt, text: q.text, options: q.options, correct: q.correct, createdAt: Date.now()
                             });
                             count++;
@@ -218,7 +231,7 @@
 
         window.deleteQuestion = async (id) => {
             if(!confirm("Hapus soal ini?")) return;
-            try { await deleteDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'questions', id)); } catch(e) { alert("Gagal hapus: " + e.message); }
+            try { await window.deleteDoc(window.doc(window.db, 'artifacts', window.appId, 'public', 'data', 'questions', id)); } catch(e) { alert("Gagal hapus: " + e.message); }
         };
 
         window.openQuestionModal = (id = null) => {
@@ -272,10 +285,10 @@
 
             try {
                 if (id) {
-                    await updateDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'questions', id), data);
+                    await window.updateDoc(window.doc(window.db, 'artifacts', window.appId, 'public', 'data', 'questions', id), data);
                 } else {
                     data.createdAt = Date.now();
-                    await addDoc(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'questions'), data);
+                    await window.addDoc(window.collection(window.db, 'artifacts', window.appId, 'public', 'data', 'questions'), data);
                 }
                 window.closeQuestionModal();
             } catch (err) { alert("Gagal menyimpan: " + err.message); }
@@ -286,8 +299,8 @@
                 setTimeout(window.setupRealtimeListener, 1000);
                 return;
             }
-            const q = query(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'));
-            onSnapshot(q, (snapshot) => {
+            const q = window.query(window.collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'));
+            window.onSnapshot(q, (snapshot) => {
                 const results = [];
                 snapshot.forEach((doc) => {
                     results.push({ id: doc.id, ...doc.data() });
@@ -855,6 +868,13 @@
         // --- STUDENT LOGIC MODIFIED ---
         window.handleStudentLogin = async function(e) {
             e.preventDefault();
+            
+            // FIX: Cek database ready
+            if (!window.isFirebaseReady || !window.db) {
+                alert("Database belum siap atau gagal terhubung. Coba refresh halaman!");
+                return;
+            }
+
             try {
                 const name = document.getElementById('student-name').value.trim();
                 const cls = document.getElementById('student-class').value;
@@ -887,39 +907,19 @@
                 submitBtn.disabled = true;
                 submitBtn.innerText = "Memeriksa Data...";
 
-                // Kita fetch data ujian untuk mengecek apakah siswa ini sudah ada
-                const qSnap = await getDocs(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'));
+                // FIX: Gunakan window.getDocs dan window.collection
+                const qSnap = await window.getDocs(window.collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'));
                 let isDuplicate = false;
-                let duplicateMessage = "";
-                
-                // BATAS WAKTU SESI (Misal: 12 Jam). Setelah 12 jam, siswa dianggap sesi baru dan boleh login lagi.
-                const SESSION_TIMEOUT = 12 * 60 * 60 * 1000; 
-                const now = Date.now();
-
                 qSnap.forEach(doc => {
                     const d = doc.data();
                     // Cek kesamaan Nama dan Kelas (Case insensitive untuk nama)
                     if (d.studentName.toLowerCase() === name.toLowerCase() && d.className === cls) {
-                        
-                        // Cek apakah data ini masih "baru" (dalam rentang waktu sesi)
-                        const timeDiff = now - d.timestamp;
-                        
-                        if (timeDiff < SESSION_TIMEOUT) {
-                            // Masih dalam sesi yang sama (anggap duplikat/curang jika login lagi)
-                            isDuplicate = true;
-                            
-                            // Cek Paket
-                            if (d.packetType !== pkt) {
-                                duplicateMessage = `Anda sudah terdaftar mengambil Paket ${d.packetType} hari ini. Tidak bisa ganti paket.`;
-                            } else {
-                                duplicateMessage = `Login berulang terdeteksi! Anda sudah tercatat masuk pada ${new Date(d.timestamp).toLocaleTimeString()}.`;
-                            }
-                        }
+                        isDuplicate = true;
                     }
                 });
 
                 if (isDuplicate) {
-                    alert(`⛔ AKSES DITOLAK\n\n${duplicateMessage}\n\nHubungi pengawas jika ini kesalahan.`);
+                    alert(`⛔ AKSES DITOLAK\n\nSiswa atas nama "${name}" di kelas "${cls}" tercatat sedang atau sudah mengerjakan ujian.\n\nLogin berulang tidak diperbolehkan. Hubungi pengawas jika ini kesalahan.`);
                     submitBtn.disabled = false;
                     submitBtn.innerText = oldText;
                     return;
