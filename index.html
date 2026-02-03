@@ -742,6 +742,7 @@
         let currentFilteredData = [];
         let currentQuestionList = [];
         let currentQuestionIndex = 0;
+        let isWarningActive = false; // New flag
 
         window.switchLoginTab = function(type) {
             const btnStudent = document.getElementById('tab-student');
@@ -1158,7 +1159,9 @@
                 }
             }, 1000);
 
+            // Event Listeners for Anti-Cheat
             document.addEventListener("visibilitychange", handleVisibility);
+            window.addEventListener("blur", handleBlur); // DETEKSI KLIK DILUAR
             document.addEventListener("contextmenu", e => e.preventDefault());
 
             history.pushState(null, null, location.href);
@@ -1172,17 +1175,39 @@
 
         function handleVisibility() {
             if (document.hidden) {
-                violations++;
-                alert(`PERINGATAN KERAS! \n\nSistem mendeteksi aktivitas mencurigakan.\nPelanggaran ke-${violations} dari 3.`);
+                registerViolation("Anda meninggalkan tab ujian!");
+            }
+        }
+
+        function handleBlur() {
+            // Jika dokumen masih terlihat (tidak hidden) tapi kehilangan fokus
+            // Ini biasanya terjadi saat klik floating app, notifikasi, atau split screen
+            if (!document.hidden) {
+                registerViolation("Terdeteksi interaksi di luar layar ujian (Aplikasi Mengambang/Notifikasi)!");
+            }
+        }
+
+        function registerViolation(message) {
+            if (isWarningActive) return; // Cegah spam alert
+            if (violations >= 3) return; // Sudah diskualifikasi
+
+            isWarningActive = true;
+            violations++;
+
+            // Beri sedikit delay agar tidak konflik event
+            setTimeout(() => {
+                alert(`PERINGATAN KERAS! (${violations}/3)\n\n${message}\n\nJangan berinteraksi dengan aplikasi lain.`);
+                isWarningActive = false;
                 if (violations >= 3) {
                     finishExam(true);
                 }
-            }
+            }, 200);
         }
 
         function finishExam(forced = false) {
             clearInterval(examTimer);
             document.removeEventListener("visibilitychange", handleVisibility);
+            window.removeEventListener("blur", handleBlur);
             window.onpopstate = null;
             window.onbeforeunload = null;
 
