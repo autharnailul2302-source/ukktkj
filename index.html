@@ -20,7 +20,7 @@
         // Global variables for Firebase access
         window.db = null;
         window.auth = null;
-        window.appId = 'ukktkj'; // Diperbarui sesuai permintaan: 'ukktkj'
+        window.appId = 'ukktkj'; 
         window.isFirebaseReady = false;
 
         async function initFirebase() {
@@ -122,6 +122,15 @@
         .sidebar-open {
             transform: translateX(0);
         }
+
+        /* Fade In Animation */
+        .animate-fade-in {
+            animation: fadeIn 0.5s ease-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
     </style>
 </head>
 <body>
@@ -131,7 +140,6 @@
         <div class="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden">
             <div class="bg-blue-600 p-6 text-center">
                 <h1 class="text-2xl font-bold text-white flex flex-col items-center justify-center gap-2">
-                    <!-- LOGO DIGANTI -->
                     <img src="images/logotkj.png" onerror="this.src='https://via.placeholder.com/150?text=Logo+TKJ'" alt="Logo TKJ" class="w-20 h-20 object-contain mb-2 bg-white rounded-full p-1">
                     Try Out Mandiri UKK TKJ
                 </h1>
@@ -188,7 +196,6 @@
         <header class="bg-white shadow-sm border-b sticky top-0 z-30">
             <div class="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
                 <div class="flex items-center gap-4">
-                    <!-- LOGO DIGANTI -->
                     <img src="images/logotkj.png" onerror="this.src='https://via.placeholder.com/50?text=TKJ'" alt="Logo TKJ" class="w-10 h-10 object-contain">
                     <div>
                         <h2 class="font-bold text-gray-800" id="header-name">Nama Siswa</h2>
@@ -462,17 +469,24 @@
             document.getElementById('header-detail').innerText = `${cls} • Paket ${pkt}`;
 
             // Initialize Exam
-            currentQuestionList = questionBank[pkt];
+            currentQuestionList = questionBank[pkt] || questionBank['A']; // Fallback
             currentQuestionIndex = 0;
             renderQuestion();
             renderSidebarButtons();
 
-            // Request Fullscreen
+            // Request Fullscreen (Robust Handling)
             try {
-                if (document.documentElement.requestFullscreen) {
-                    document.documentElement.requestFullscreen().catch(e => console.log(e));
+                const elem = document.documentElement;
+                if (elem.requestFullscreen) {
+                    elem.requestFullscreen().catch(err => console.log(err));
+                } else if (elem.webkitRequestFullscreen) { /* Safari */
+                    elem.webkitRequestFullscreen();
+                } else if (elem.msRequestFullscreen) { /* IE11 */
+                    elem.msRequestFullscreen();
                 }
-            } catch(err){}
+            } catch(err){
+                console.log("Fullscreen aborted or not supported", err);
+            }
 
             // Switch View
             document.getElementById('section-login').classList.add('hidden-section');
@@ -485,6 +499,7 @@
         // --- EXAM LOGIC NEW ---
         
         function renderQuestion() {
+            if(!currentQuestionList || !currentQuestionList[currentQuestionIndex]) return;
             const q = currentQuestionList[currentQuestionIndex];
             const container = document.getElementById('question-area');
             const total = currentQuestionList.length;
@@ -654,12 +669,25 @@
             // Anti-Cheat: Visibility Change
             document.addEventListener("visibilitychange", handleVisibility);
             document.addEventListener("contextmenu", e => e.preventDefault());
+
+            // --- PROTEKSI TAMBAHAN (MOBILE & DESKTOP) ---
+            
+            // 1. Kunci Tombol Back (History Push State)
+            history.pushState(null, null, location.href);
+            window.onpopstate = function () {
+                history.go(1);
+            };
+
+            // 2. Cegah Refresh/Tutup Tab
+            window.onbeforeunload = function() {
+                return "PERINGATAN: Ujian sedang berlangsung.";
+            };
         }
 
         function handleVisibility() {
             if (document.hidden) {
                 violations++;
-                alert(`PERINGATAN KERAS! \nAnda terdeteksi meninggalkan halaman ujian. \nPelanggaran ke-${violations} dari 3.`);
+                alert(`PERINGATAN KERAS! \n\nSistem mendeteksi aktivitas mencurigakan.\nPelanggaran ke-${violations} dari 3.`);
                 if (violations >= 3) {
                     finishExam(true);
                 }
@@ -684,6 +712,10 @@
         function finishExam(forced = false) {
             clearInterval(examTimer);
             document.removeEventListener("visibilitychange", handleVisibility);
+
+            // Matikan proteksi saat ujian selesai agar siswa bisa keluar
+            window.onpopstate = null;
+            window.onbeforeunload = null;
 
             // Calculate Score
             let score = 0;
@@ -807,8 +839,10 @@
             location.reload();
         }
 
-        // Initialize Icons
-        lucide.createIcons();
+        // Initialize Icons Safely
+        if(typeof lucide !== 'undefined') {
+            lucide.createIcons();
+        }
     </script>
 </body>
 </html>
