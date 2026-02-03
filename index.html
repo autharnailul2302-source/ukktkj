@@ -8,7 +8,8 @@
     <script>
         window.onerror = function(message, source, lineno, colno, error) {
             if(message.includes("ResizeObserver")) return;
-            alert("Sistem Error: " + message + "\nBaris: " + lineno);
+            // alert("Sistem Error: " + message + "\nBaris: " + lineno); // Silent error for production smoothness
+            console.error(message, lineno);
         };
     </script>
 
@@ -1052,8 +1053,9 @@
                     ? `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4"><polyline points="20 6 9 17 4 12"></polyline></svg>` 
                     : "";
 
+                // FIX: Add quotes around q.id to support alphanumeric IDs from DB
                 optionsHTML += `
-                    <label class="flex items-center p-4 rounded-lg border cursor-pointer transition-all mb-3 ${activeClass}" onclick="saveAnswer(${q.id}, ${optIdx}, this)">
+                    <label class="flex items-center p-4 rounded-lg border cursor-pointer transition-all mb-3 ${activeClass}" onclick="saveAnswer('${q.id}', ${optIdx}, this)">
                         <div class="${indicatorClass} radio-indicator">${indicatorContent}</div>
                         <span class="text-gray-700 text-base md:text-lg">${opt}</span>
                     </label>
@@ -1186,6 +1188,8 @@
 
             let correctCount = 0;
             currentQuestionList.forEach(q => {
+                // Ensure q.correct is defined
+                if (typeof q.correct === 'undefined') return;
                 if (userAnswers[q.id] === q.correct) correctCount++;
             });
             const score = Math.round((correctCount / currentQuestionList.length) * 100);
@@ -1256,6 +1260,9 @@
                 reviewListEl.innerHTML = '';
                 
                 currentQuestionList.forEach((q, idx) => {
+                    // Safety check if q is malformed
+                    if (!q || !q.options) return;
+
                     const userAnsIdx = userAnswers[q.id];
                     const isCorrect = userAnsIdx === q.correct;
                     const isSkipped = userAnsIdx === undefined;
@@ -1264,7 +1271,10 @@
                     let icon = isCorrect ? `<i data-lucide="check" class="text-green-600 w-5 h-5"></i>` : `<i data-lucide="x" class="text-red-600 w-5 h-5"></i>`;
                     
                     let userAnsText = isSkipped ? "<span class='text-gray-500 italic'>Tidak dijawab</span>" : q.options[userAnsIdx];
-                    let correctAnsText = q.options[q.correct];
+                    // Safety check for array access
+                    if (userAnsIdx !== undefined && !userAnsText) userAnsText = "Opsi Tidak Valid";
+
+                    let correctAnsText = q.options[q.correct] || "Kunci Jawaban Tidak Valid";
 
                     const reviewItem = `
                         <div class="p-4 rounded-lg border ${statusClass}">
