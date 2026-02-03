@@ -37,7 +37,7 @@
                 let firebaseConfig;
                 
                 // --- [PENTING] AREA KONFIGURASI MANUAL ---
-                // Config Firebase dari user
+                // Config Firebase Anda (Sudah dirapikan)
                 const customConfig = {
                     apiKey: "AIzaSyAdqApOvuUXrZUO19NfiqZCLSyUYR74w5M",
                     authDomain: "waliq-ded98.firebaseapp.com",
@@ -51,7 +51,7 @@
 
                 // Cek konfigurasi: Prioritaskan Manual, lalu Environment, lalu Gagal
                 if (customConfig.apiKey && customConfig.apiKey !== "GANTI_DENGAN_API_KEY_ANDA") {
-                    console.log("Menggunakan Konfigurasi Manual");
+                    console.log("Menggunakan Konfigurasi Manual dari User");
                     firebaseConfig = customConfig;
                 } else if (typeof __firebase_config !== 'undefined') {
                     console.log("Menggunakan Konfigurasi Environment");
@@ -69,11 +69,27 @@
                 window.auth = getAuth(app);
                 window.db = getFirestore(app);
 
-                // Login
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    await signInWithCustomToken(window.auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(window.auth);
+                // Login dengan Error Handling Detail
+                try {
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await signInWithCustomToken(window.auth, __initial_auth_token);
+                    } else {
+                        await signInAnonymously(window.auth);
+                    }
+                } catch (authErr) {
+                    console.error("Auth Error:", authErr);
+                    let pesan = "Gagal Login Database: " + authErr.message;
+                    
+                    if (authErr.code === 'auth/operation-not-allowed') {
+                        pesan = "⚠️ ERROR KONFIGURASI FIREBASE:\n\nFitur 'Anonymous Sign-in' belum diaktifkan!\n\nSOLUSI: Buka Firebase Console -> Authentication -> Sign-in method -> Aktifkan Anonymous.";
+                    } else if (authErr.code === 'auth/unauthorized-domain') {
+                        pesan = "⚠️ ERROR DOMAIN:\n\nDomain aplikasi ini belum diizinkan oleh Firebase.\n\nSOLUSI: Buka Firebase Console -> Authentication -> Settings -> Authorized Domains -> Tambahkan domain yang muncul di address bar browser Anda.";
+                    } else if (authErr.code === 'auth/invalid-api-key') {
+                        pesan = "⚠️ API KEY SALAH:\n\nPeriksa kembali API Key di bagian 'AREA KONFIGURASI MANUAL'. Pastikan tidak ada spasi atau karakter yang hilang.";
+                    }
+                    
+                    alert(pesan);
+                    throw authErr; // Lempar ulang agar masuk ke catch utama
                 }
                 
                 window.isFirebaseReady = true;
@@ -87,7 +103,11 @@
             } catch (error) {
                 console.error("Firebase Init Error (Aplikasi tetap berjalan offline):", error);
                 updateConnectionStatus(false, "Gagal Koneksi");
-                alert("Gagal terhubung ke Firebase: " + error.message + "\nPeriksa koneksi internet atau konfigurasi API Key.");
+                // Alert sudah ditangani di blok try/catch auth di atas untuk error auth spesifik
+                if (!error.code || !error.code.startsWith('auth/')) {
+                     // Hanya tampilkan alert ini jika BUKAN error auth (misal error jaringan umum)
+                     alert("Gagal terhubung ke Firebase.\n\nDetail: " + error.message + "\n\nCek koneksi internet Anda.");
+                }
             }
         }
         
@@ -112,7 +132,11 @@
                     console.log("Data saved to cloud successfully");
                 } catch (e) {
                     console.error("Failed to save to cloud", e);
-                    alert("Gagal menyimpan ke database pusat (Error Jaringan). Nilai tersimpan di layar siswa.");
+                    if (e.code === 'permission-denied') {
+                        alert("⚠️ GAGAL MENYIMPAN (IZIN DITOLAK):\n\nFirestore Rules Anda memblokir penyimpanan data.\n\nSOLUSI: Buka Firebase Console -> Firestore Database -> Rules -> Ubah 'allow read, write: if false;' menjadi 'allow read, write: if true;' (untuk sementara).");
+                    } else {
+                        alert("Gagal menyimpan ke database pusat (Error Jaringan). Nilai tersimpan di layar siswa.");
+                    }
                 }
             } else {
                 console.log("Disimpan lokal (Firebase tidak aktif)");
@@ -140,6 +164,9 @@
                 if(window.updateDashboardTable) window.updateDashboardTable(results);
             }, (error) => {
                 console.error("Error mengambil data realtime:", error);
+                if (error.code === 'permission-denied') {
+                     alert("⚠️ GAGAL MEMBACA DATA:\n\nIzin Ditolak (Permission Denied). Periksa Firestore Rules di Firebase Console.");
+                }
             });
         }
     </script>
