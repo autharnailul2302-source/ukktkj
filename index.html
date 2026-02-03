@@ -25,18 +25,6 @@
         import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, addDoc, onSnapshot, query, getDocs, doc, updateDoc, deleteDoc, setDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // --- FIX: EXPOSE FIREBASE FUNCTIONS TO GLOBAL SCOPE ---
-        window.getDocs = getDocs;
-        window.collection = collection;
-        window.addDoc = addDoc;
-        window.onSnapshot = onSnapshot;
-        window.query = query;
-        window.doc = doc;
-        window.updateDoc = updateDoc;
-        window.deleteDoc = deleteDoc;
-        window.setDoc = setDoc;
-        // -----------------------------------------------------
-
         window.db = null;
         window.auth = null;
         window.appId = 'ukktkj'; 
@@ -902,18 +890,36 @@
                 // Kita fetch data ujian untuk mengecek apakah siswa ini sudah ada
                 const qSnap = await getDocs(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'));
                 let isDuplicate = false;
+                let duplicateMessage = "";
+                
+                // BATAS WAKTU SESI (Misal: 12 Jam). Setelah 12 jam, siswa dianggap sesi baru dan boleh login lagi.
+                const SESSION_TIMEOUT = 12 * 60 * 60 * 1000; 
+                const now = Date.now();
+
                 qSnap.forEach(doc => {
                     const d = doc.data();
                     // Cek kesamaan Nama dan Kelas (Case insensitive untuk nama)
                     if (d.studentName.toLowerCase() === name.toLowerCase() && d.className === cls) {
-                        // Opsional: Boleh login ulang kalau statusnya DISKUALIFIKASI atau error tertentu, 
-                        // tapi defaultnya kita blokir untuk keamanan maksimal.
-                        isDuplicate = true;
+                        
+                        // Cek apakah data ini masih "baru" (dalam rentang waktu sesi)
+                        const timeDiff = now - d.timestamp;
+                        
+                        if (timeDiff < SESSION_TIMEOUT) {
+                            // Masih dalam sesi yang sama (anggap duplikat/curang jika login lagi)
+                            isDuplicate = true;
+                            
+                            // Cek Paket
+                            if (d.packetType !== pkt) {
+                                duplicateMessage = `Anda sudah terdaftar mengambil Paket ${d.packetType} hari ini. Tidak bisa ganti paket.`;
+                            } else {
+                                duplicateMessage = `Login berulang terdeteksi! Anda sudah tercatat masuk pada ${new Date(d.timestamp).toLocaleTimeString()}.`;
+                            }
+                        }
                     }
                 });
 
                 if (isDuplicate) {
-                    alert(`⛔ AKSES DITOLAK\n\nSiswa atas nama "${name}" di kelas "${cls}" tercatat sedang atau sudah mengerjakan ujian.\n\nLogin berulang tidak diperbolehkan. Hubungi pengawas jika ini kesalahan.`);
+                    alert(`⛔ AKSES DITOLAK\n\n${duplicateMessage}\n\nHubungi pengawas jika ini kesalahan.`);
                     submitBtn.disabled = false;
                     submitBtn.innerText = oldText;
                     return;
