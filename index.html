@@ -2401,15 +2401,16 @@ button, .round-btn, .d-btn, .auth-btn {
                  onmousedown="event.stopPropagation(); if(raceState.active) moveCar(1); else initRace();">
             </div>
 
-            <!-- UPDATE: Mobil Player Menggunakan Gambar Custom -->
-            <div id="player-car" style="position:absolute; bottom: 20px; left: 130px; transition: left 0.1s; pointer-events: none; z-index: 5; width: 60px; height: 100px; display: flex; justify-content: center; align-items: center;">
+            <!-- UPDATE: Ukuran Mobil Player Disamakan dengan NPC (40x40) -->
+            <div id="player-car" style="position:absolute; bottom: 20px; left: 130px; transition: left 0.1s; pointer-events: none; z-index: 5; width: 40px; height: 40px; display: flex; justify-content: center; align-items: center;">
                 <!-- FIX: Menyimpan parentElement ke variabel 'p' sebelum memanipulasi DOM agar tidak error null reference -->
-                <img src="images/player-race.png" style="width: 100%; height: 100%; object-fit: contain;" onerror="var p=this.parentElement; this.style.display='none'; p.innerText='🏎️'; p.style.fontSize='40px'; p.style.transform='rotate(-90deg)'">
+                <img src="images/player-race.png" style="width: 100%; height: 100%; object-fit: contain;" onerror="var p=this.parentElement; this.style.display='none'; p.innerText='🏎️'; p.style.fontSize='30px'; p.style.transform='rotate(-90deg)'">
             </div>
             <div id="score-race" style="position:absolute; top: 10px; right: 10px; color: #fbbf24; font-weight: 900; font-family: monospace; font-size: 20px; text-shadow: 2px 2px 0 #000; pointer-events: none; z-index: 5;">SKOR: 0</div>
             
-            <div id="start-msg-race" style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); width:100%; text-align:center; color:white; font-weight:bold; font-family:'Exo 2'; text-shadow: 0 0 5px black; animation: pulse 1s infinite; pointer-events: none; z-index: 10;">
-                TAP LAYAR KANAN/KIRI<br>UNTUK NGEBUT!
+            <!-- PERBAIKAN POSISI TEKS: Menggunakan left:0 dan width:100% agar pasti di tengah -->
+            <div id="start-msg-race" style="position:absolute; top:50%; left:0; width:100%; transform:translateY(-50%); text-align:center; color:#fbbf24; font-weight:900; font-size:18px; font-family:'Exo 2'; text-shadow: 2px 2px 4px #000; animation: pulse 1s infinite; pointer-events: none; z-index: 25;">
+                TAP LAYAR / TOMBOL ⬅️➡️<br>UNTUK MULAI BALAPAN!
             </div>
         </div>
         
@@ -22610,19 +22611,20 @@ let currentWarnetSoal = null;
                     en.el.style.justifyContent = 'center';
                     en.el.style.alignItems = 'center';
                     
-                    // UPDATE: Putar mobil musuh agar menghadap ke ATAS (-90deg)
-                    // Ini memberikan efek POV Top Down (lihat atap mobil) dan arah maju ke atas
-                    en.el.style.transform = 'rotate(-90deg)'; 
-                    en.el.style.transformOrigin = 'center center';
+                    // UPDATE: Jangan putar container secara default (Hanya putar jika Fallback ke Icon)
+                    // Agar gambar Top-Down tidak miring
+                    // en.el.style.transform = 'rotate(-90deg)'; <-- DIHAPUS
                     
                     en.el.style.top = en.y + 'px';
                     en.el.style.left = en.x + 'px';
                     
-                    // UPDATE: Render Gambar jika ada, Fallback ke Icon
+                    // UPDATE: Render Gambar jika ada, Fallback ke Icon dengan Rotasi
                     if (en.img) {
-                        en.el.innerHTML = `<img src="${en.img}" style="width: 100%; height: 100%; object-fit: contain;" onerror="this.style.display='none';this.parentElement.innerText='${en.icon}'">`;
+                        // Jika gambar gagal (onerror), baru kita putar parent-nya -90deg dan tampilkan icon
+                        en.el.innerHTML = `<img src="${en.img}" style="width: 100%; height: 100%; object-fit: contain;" onerror="var p=this.parentElement; this.style.display='none'; p.innerText='${en.icon}'; p.style.fontSize='40px'; p.style.transform='rotate(-90deg)'">`;
                     } else {
                         en.el.innerText = en.icon;
+                        en.el.style.transform = 'rotate(-90deg)'; // Putar jika hanya icon
                     }
 
                     // Truk sedikit lebih besar visualnya (Fallback font size)
@@ -22692,14 +22694,28 @@ let currentWarnetSoal = null;
             
             if(typeof AudioService !== 'undefined') AudioService.playSFX('hit');
 
-            // Delay Alert agar ledakan terlihat dulu
+            // Delay agar ledakan terlihat dulu
             setTimeout(() => {
                 // Konversi Skor ke Energi (1 Skor = 1 Energi, Max 100)
                 const energyGain = Math.min(100, raceState.score); 
                 STATE.player.energy = Math.min(100, STATE.player.energy + energyGain);
                 
-                alert(`TABRAKAN MAUT! 💥\n\nSkor Akhir: ${raceState.score}\nEnergi Pulih: +${energyGain}`);
-                quitRacing();
+                // UPDATE: GANTI ALERT DENGAN DIALOGUE AGAR TIDAK KELUAR FULLSCREEN
+                quitRacing(); // Tutup overlay balap dulu
+                
+                showDialogue("TABRAKAN MAUT! 💥", 
+                    `Mobilmu hancur!\n\nSkor Akhir: **${raceState.score}**\nEnergi Pulih: **+${energyGain}**`, 
+                    [{
+                        text: "Lanjut Main", 
+                        action: () => {
+                            closeDialogue();
+                            // Paksa fullscreen lagi jaga-jaga
+                            toggleFullScreen();
+                        }
+                    }], 
+                    'images/player-race.png'
+                );
+                
             }, 800);
         }
 
