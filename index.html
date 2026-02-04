@@ -299,11 +299,32 @@
                 return;
             }
             const q = query(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'));
+            
+            // Flag untuk mencegah alert muncul saat pertama kali load data
+            let isInitialLoad = true;
+
             onSnapshot(q, (snapshot) => {
                 const results = [];
                 snapshot.forEach((doc) => {
                     results.push({ id: doc.id, ...doc.data() });
                 });
+                
+                // --- LOGIKA DETEKSI KECURANGAN REALTIME ---
+                if (!isInitialLoad && window.currentUserRole === 'teacher') {
+                    snapshot.docChanges().forEach((change) => {
+                        // Hanya cek jika data dimodifikasi atau ditambah
+                        if (change.type === "modified" || change.type === "added") {
+                            const data = change.doc.data();
+                            // Jika ada pelanggaran > 0 atau status mengandung kata diskualifikasi
+                            if (data.violations > 0 || (data.status && data.status.includes("DISKUALIFIKASI"))) {
+                                if(window.triggerCheatAlert) window.triggerCheatAlert(data);
+                            }
+                        }
+                    });
+                }
+                isInitialLoad = false;
+                // ------------------------------------------
+
                 results.sort((a, b) => b.timestamp - a.timestamp);
                 if(window.updateDashboardTable) window.updateDashboardTable(results);
             });
@@ -503,6 +524,60 @@
                     <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-bold">Simpan Soal</button>
                 </div>
             </form>
+        </div>
+    </div>
+    
+    <!-- MODAL CHEATING ALERT -->
+    <div id="modal-cheat-alert" class="fixed inset-0 z-[60] flex items-center justify-center bg-red-900/90 backdrop-blur-sm hidden animate-fade-in">
+        <div class="bg-white rounded-2xl shadow-2xl p-8 max-w-lg w-full mx-4 text-center border-4 border-red-600 relative overflow-hidden">
+            <!-- Background pulse effect -->
+            <div class="absolute inset-0 bg-red-50 animate-pulse -z-10"></div>
+            
+            <div class="w-24 h-24 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-6 border-4 border-red-200">
+                <i data-lucide="siren" class="w-12 h-12 animate-bounce"></i>
+            </div>
+            
+            <h2 class="text-3xl font-extrabold text-red-700 mb-2 uppercase tracking-wider">PERINGATAN BAHAYA!</h2>
+            <h3 class="text-xl font-bold text-gray-800 mb-4" id="cheat-student-name">Nama Siswa</h3>
+            
+            <div class="bg-red-100 border border-red-200 p-4 rounded-xl mb-6">
+                <p class="text-red-800 font-semibold text-lg" id="cheat-message">Terdeteksi melakukan kecurangan!</p>
+                <div class="mt-2 text-sm text-red-600">
+                    Status: <span id="cheat-status" class="font-bold">DISKUALIFIKASI</span> | 
+                    Pelanggaran: <span id="cheat-count" class="font-bold">3x</span>
+                </div>
+            </div>
+            
+            <button onclick="window.closeCheatAlert()" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-4 rounded-xl shadow-lg hover:shadow-red-500/50 transition-all active:scale-95 text-lg uppercase tracking-wide">
+                MENGERTI & TUTUP
+            </button>
+        </div>
+    </div>
+    
+    <!-- MODAL VIOLATION DETAILS (NEW) -->
+    <div id="modal-violation-details" class="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-sm hidden">
+        <div class="bg-white rounded-xl shadow-2xl p-6 max-w-md w-full mx-4 animate-fade-in">
+            <div class="flex justify-between items-center mb-4 border-b pb-2">
+                <h3 class="text-lg font-bold text-red-600 flex items-center gap-2">
+                    <i data-lucide="alert-triangle" class="w-5 h-5"></i> Detail Pelanggaran
+                </h3>
+                <button onclick="document.getElementById('modal-violation-details').classList.add('hidden')" class="text-gray-500 hover:text-gray-700">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            <div class="mb-4">
+                <p class="text-sm text-gray-600 mb-2">Siswa: <span id="violation-student-name" class="font-bold text-gray-800">Nama Siswa</span></p>
+                <div class="bg-red-50 p-2 rounded text-xs text-red-600 mb-2 border border-red-100 flex items-start gap-2">
+                    <i data-lucide="info" class="w-4 h-4 shrink-0 mt-0.5"></i>
+                    <span>Log ini mencatat waktu dan alasan sistem mendeteksi ketidakjujuran selama ujian berlangsung.</span>
+                </div>
+                <div id="violation-list" class="space-y-2 max-h-60 overflow-y-auto bg-gray-50 p-3 rounded-lg border">
+                    <!-- Logs go here -->
+                </div>
+            </div>
+            <div class="flex justify-end">
+                <button onclick="document.getElementById('modal-violation-details').classList.add('hidden')" class="px-4 py-2 bg-gray-800 text-white rounded-lg text-sm font-bold shadow hover:bg-gray-900">Tutup</button>
+            </div>
         </div>
     </div>
 
@@ -749,12 +824,13 @@
         let examTimer = null;
         let timeLeft = 3600; 
         let violations = 0;
+        let violationLogs = []; // NEW: Array to store log details
         let userAnswers = {};
         let dashboardData = [];
         let currentFilteredData = [];
         let currentQuestionList = [];
         let currentQuestionIndex = 0;
-        let isWarningActive = false; // New flag
+        let isWarningActive = false; 
 
         window.switchLoginTab = function(type) {
             const btnStudent = document.getElementById('tab-student');
@@ -805,6 +881,66 @@
                 pnlSoal.classList.remove('hidden-section');
                 window.filterQuestionBank(); // Refresh bank list
             }
+        };
+        
+        // --- NEW: CHEAT ALERT LOGIC ---
+        window.triggerCheatAlert = function(data) {
+            // Hanya jalankan jika di dashboard guru
+            if (document.getElementById('section-dashboard').classList.contains('hidden-section')) return;
+
+            const modal = document.getElementById('modal-cheat-alert');
+            const nameEl = document.getElementById('cheat-student-name');
+            const msgEl = document.getElementById('cheat-message');
+            const statusEl = document.getElementById('cheat-status');
+            const countEl = document.getElementById('cheat-count');
+
+            nameEl.innerText = data.studentName + " (" + data.className + ")";
+            statusEl.innerText = data.status;
+            countEl.innerText = data.violations + "x";
+
+            if (data.status.includes('DISKUALIFIKASI')) {
+                 msgEl.innerText = "SISWA INI TELAH DIDISKUALIFIKASI OLEH SISTEM!";
+            } else {
+                 msgEl.innerText = "Terdeteksi melakukan kecurangan (Pindah Tab/Split Screen)!";
+            }
+
+            modal.classList.remove('hidden');
+            
+            // Optional: Mainkan suara jika browser mengizinkan
+            try {
+                const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
+                audio.volume = 0.5;
+                audio.play().catch(() => {}); // Ignore autoplay errors
+            } catch(e) {}
+        };
+
+        window.closeCheatAlert = function() {
+            document.getElementById('modal-cheat-alert').classList.add('hidden');
+        };
+        
+        // --- NEW: SHOW VIOLATION DETAILS ---
+        window.showViolationDetails = (id) => {
+            const item = dashboardData.find(x => x.id === id);
+            if (!item) return;
+
+            document.getElementById('violation-student-name').innerText = item.studentName;
+            const list = document.getElementById('violation-list');
+            list.innerHTML = '';
+
+            if (!item.violationLogs || item.violationLogs.length === 0) {
+                list.innerHTML = '<p class="text-xs text-gray-400 italic text-center py-4">Tidak ada log detail tercatat.<br> (Sistem versi lama atau deteksi manual).</p>';
+            } else {
+                item.violationLogs.forEach((log) => {
+                    const time = new Date(log.time).toLocaleTimeString('id-ID');
+                    list.innerHTML += `
+                        <div class="text-xs border-b last:border-0 pb-2 mb-2 bg-white p-2 rounded shadow-sm">
+                            <span class="font-bold text-red-600 bg-red-50 px-1 rounded border border-red-100 mr-1">[${time}]</span> 
+                            <span class="text-gray-700 font-medium">${log.message}</span>
+                        </div>
+                    `;
+                });
+            }
+            document.getElementById('modal-violation-details').classList.remove('hidden');
         };
 
         window.filterQuestionBank = function() {
@@ -937,6 +1073,10 @@
                 
                 currentQuestionList = [...dbQuestions];
                 shuffleArray(currentQuestionList);
+                
+                // RESET STATE
+                violationLogs = [];
+                violations = 0;
 
                 // --- SAVE START EXAM ---
                 const startData = {
@@ -946,7 +1086,8 @@
                     packetType: pkt,
                     score: '-',
                     status: "SEDANG MENGERJAKAN",
-                    violations: 0
+                    violations: 0,
+                    violationLogs: [] // Init empty log
                 };
                 await window.saveExamStart(startData); 
 
@@ -1243,6 +1384,12 @@
                 registerViolation("Terdeteksi interaksi di luar layar ujian (Aplikasi Mengambang/Notifikasi)!");
             }
         }
+        
+        // --- NEW: Play Alarm Sound ---
+        function playAlarm() {
+            const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
+            audio.play().catch(e => console.log("Audio blocked", e));
+        }
 
         function registerViolation(message) {
             if (isWarningActive) return; // Cegah spam alert
@@ -1250,10 +1397,28 @@
 
             isWarningActive = true;
             violations++;
+            
+            // 1. Play Warning Sound
+            playAlarm();
+
+            // NEW: Push detailed log
+            violationLogs.push({ time: Date.now(), message: message });
+
+            // NEW: Sync violation to Firestore IMMEDIATELY (real-time audit)
+            if (window.currentExamDocId && window.db) {
+                const statusUpdate = violations >= 3 ? "DISKUALIFIKASI (Kecurangan)" : "SEDANG MENGERJAKAN";
+                updateDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results', window.currentExamDocId), {
+                    violations: violations,
+                    violationLogs: violationLogs,
+                    status: statusUpdate
+                }).catch(console.error);
+            }
 
             // Beri sedikit delay agar tidak konflik event
             setTimeout(() => {
-                alert(`PERINGATAN KERAS! (${violations}/3)\n\n${message}\n\nJangan berinteraksi dengan aplikasi lain.`);
+                // 2. Tampilkan Pesan Peringatan Tegas
+                alert(`PERINGATAN KERAS! (${violations}/3)\n\n${message}\n\nSetiap kecurangan akan terdeteksi di sistem.\nIngat kejujuran adalah hal terpenting.`);
+                
                 isWarningActive = false;
                 if (violations >= 3) {
                     finishExam(true);
@@ -1283,7 +1448,8 @@
                 packetType: currentStudent.pkt,
                 score: score,
                 status: forced ? "DISKUALIFIKASI (Kecurangan)" : "SELESAI",
-                violations: forced ? 3 : violations
+                violations: forced ? 3 : violations,
+                violationLogs: violationLogs // Simpan logs akhir
             };
 
             if(window.saveExamResult) window.saveExamResult(resultData);
@@ -1304,18 +1470,23 @@
             scoreEl.innerText = score;
 
             if (forced) {
+                // 1. Play Sound Again (Loud)
+                playAlarm();
+                
+                // 2. Styling Diskualifikasi
                 resultIcon.className = "w-20 h-20 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-6 animate-pulse";
                 resultIcon.innerHTML = `<i data-lucide="alert-octagon" class="w-10 h-10"></i>`;
                 
                 resultTitle.innerText = "ANDA DIDISKUALIFIKASI";
                 resultTitle.className = "text-2xl font-bold text-red-600 mb-2";
                 
-                resultMsg.innerText = "Sistem mendeteksi pelanggaran keamanan (pindah tab) berulang kali. Hasil ujian Anda ditandai sebagai kecurangan.";
-                resultMsg.className = "text-red-500 mb-6 font-semibold";
+                // 3. Pesan Khusus (Sesuai Request)
+                resultMsg.innerText = "Setiap kecurangan akan terdeteksi di sistem. Ingat, kejujuran adalah hal terpenting.";
+                resultMsg.className = "text-red-500 mb-6 font-bold text-lg";
                 
                 scoreEl.className = "text-5xl font-extrabold text-red-600";
                 
-                motivationalEl.innerHTML = `Sistem mencatat 3x pelanggaran. Jujur itu hebat, coba lagi lain kali dengan integritas!`;
+                motivationalEl.innerHTML = `Sistem mencatat 3x pelanggaran. Kejujuran adalah hal terpenting dalam ujian ini.`;
                 motivationalEl.className = "mb-6 px-4 py-3 rounded-lg font-bold text-sm md:text-base border-l-4 bg-red-100 text-red-800 border-red-500";
                 
                 btnReview.style.display = 'none';
@@ -1452,7 +1623,13 @@
                     statusIcon = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i>`;
                 }
                 
-                const violationDisplay = item.violations > 0 ? `<span class="bg-red-100 text-red-700 px-2 py-1 rounded text-xs font-bold">${item.violations}x</span>` : '-';
+                // MODIFIED: Clickable violation button
+                const violationDisplay = item.violations > 0 
+                    ? `<button onclick="window.showViolationDetails('${item.id}')" class="bg-red-100 hover:bg-red-200 text-red-700 px-3 py-1 rounded text-xs font-bold flex items-center gap-1 mx-auto transition-colors shadow-sm">
+                         ${item.violations}x <i data-lucide="info" class="w-3 h-3"></i>
+                       </button>` 
+                    : '-';
+                    
                 const pktColor = item.packetType === 'A' ? 'bg-blue-100 text-blue-700' : item.packetType === 'B' ? 'bg-purple-100 text-purple-700' : 'bg-orange-100 text-orange-700';
 
                 const row = `
