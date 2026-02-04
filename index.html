@@ -45,6 +45,25 @@
         window.allQuestionsDB = []; 
         window.currentExamDocId = null; // ID dokumen ujian siswa saat ini
 
+        // --- NEW: DEVICE FINGERPRINTING ---
+        // Membuat identitas unik perangkat berdasarkan hardware & browser traits
+        // Ini mengatasi celah ganti browser/incognito
+        function getDeviceFingerprint() {
+            const nav = window.navigator;
+            const screen = window.screen;
+            // Gabungkan properti unik: UserAgent + Resolusi Layar + Kedalaman Warna + CPU Cores + Timezone
+            const raw = `${nav.userAgent}||${screen.width}x${screen.height}||${screen.colorDepth}||${nav.hardwareConcurrency || 'u'}||${new Date().getTimezoneOffset()}`;
+            
+            // Simple Hash Function untuk mempersingkat string
+            let hash = 0;
+            for (let i = 0; i < raw.length; i++) {
+                const char = raw.charCodeAt(i);
+                hash = ((hash << 5) - hash) + char;
+                hash = hash & hash; // Convert to 32bit integer
+            }
+            return "DEV-" + Math.abs(hash).toString(16);
+        }
+
         async function initFirebase() {
             try {
                 let firebaseConfig;
@@ -158,6 +177,9 @@
         window.saveExamStart = async (data) => {
             if (window.isFirebaseReady && window.db) {
                 try {
+                    // Tambahkan fingerprint ke data
+                    data.deviceFingerprint = getDeviceFingerprint();
+                    
                     const docRef = await addDoc(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'), data);
                     window.currentExamDocId = docRef.id; // Simpan ID untuk update nanti
                     console.log("Exam started, doc created:", window.currentExamDocId);
@@ -231,6 +253,55 @@
         window.deleteQuestion = async (id) => {
             if(!confirm("Hapus soal ini?")) return;
             try { await deleteDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'questions', id)); } catch(e) { alert("Gagal hapus: " + e.message); }
+        };
+        
+        // --- NEW: DELETE EXAM RESULT (PER STUDENT) ---
+        window.deleteExamResult = async (id) => {
+            if(!confirm("Apakah Anda yakin ingin MENGHAPUS data ujian siswa ini?\n\nTindakan ini tidak dapat dibatalkan.")) return;
+            try {
+                await deleteDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results', id));
+                // UI akan otomatis update via onSnapshot
+            } catch(e) {
+                alert("Gagal menghapus: " + e.message);
+            }
+        };
+
+        // --- NEW: RESET ALL DATA ---
+        window.resetAllExamData = async () => {
+            const key = prompt("⚠️ PERINGATAN BAHAYA!\n\nAnda akan menghapus SEMUA data hasil ujian seluruh siswa.\nTindakan ini SANGAT TIDAK DAPAT DIBATALKAN.\n\nKetik 'HAPUS SEMUA' (Huruf Besar) untuk konfirmasi:");
+            
+            if (key !== 'HAPUS SEMUA') {
+                return alert("Penghapusan dibatalkan.");
+            }
+
+            const btn = document.getElementById('btn-reset-all');
+            if(btn) { btn.disabled = true; btn.innerText = "Sedang Menghapus..."; }
+
+            try {
+                // Fetch all docs first
+                const q = query(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'));
+                const snapshot = await getDocs(q);
+                
+                if (snapshot.empty) {
+                    alert("Data sudah kosong.");
+                    return;
+                }
+
+                // Delete one by one (Firestore client SDK limitations on batch delete for huge sets, looping is safer for small apps)
+                const deletePromises = [];
+                snapshot.forEach((doc) => {
+                    deletePromises.push(deleteDoc(doc.ref));
+                });
+                
+                await Promise.all(deletePromises);
+                alert(`Berhasil menghapus ${deletePromises.length} data ujian.`);
+                
+            } catch(e) {
+                console.error(e);
+                alert("Gagal mereset data: " + e.message);
+            } finally {
+                if(btn) { btn.disabled = false; btn.innerHTML = `<i data-lucide="trash-2" class="w-4 h-4"></i> Reset Semua Data`; if(typeof lucide !== 'undefined') lucide.createIcons(); }
+            }
         };
 
         window.openQuestionModal = (id = null) => {
@@ -622,7 +693,10 @@
                     <div class="p-6 border-b flex flex-col gap-4">
                         <div class="flex justify-between items-center">
                             <h2 class="text-lg font-bold text-gray-800">Filter Data Hasil Ujian</h2>
-                            <button onclick="window.exportToCSV()" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 shadow-sm transition hover:scale-105"><i data-lucide="download" class="w-4 h-4"></i> Export Data Terpilih</button>
+                            <div class="flex gap-2">
+                                <button id="btn-reset-all" onclick="window.resetAllExamData()" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 shadow-sm transition hover:scale-105"><i data-lucide="trash-2" class="w-4 h-4"></i> Reset Semua Data</button>
+                                <button onclick="window.exportToCSV()" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 shadow-sm transition hover:scale-105"><i data-lucide="download" class="w-4 h-4"></i> Export Data Terpilih</button>
+                            </div>
                         </div>
                         
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-3 bg-gray-50 p-4 rounded-lg border border-gray-200">
@@ -662,10 +736,11 @@
                                     <th class="px-6 py-4 text-center">Nilai</th>
                                     <th class="px-6 py-4">Status</th>
                                     <th class="px-6 py-4 text-center">Pelanggaran</th>
+                                    <th class="px-6 py-4 text-center">Aksi</th>
                                 </tr>
                             </thead>
                             <tbody id="dashboard-table-body" class="divide-y divide-gray-100">
-                                <tr><td colspan="7" class="px-6 py-12 text-center text-gray-400">Menunggu data ujian...</td></tr>
+                                <tr><td colspan="8" class="px-6 py-12 text-center text-gray-400">Menunggu data ujian...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -1019,37 +1094,84 @@
                     return;
                 }
 
-                // --- 1. DETEKSI LOGIN DI PERANGKAT INI (LOCAL STORAGE) ---
+                // --- 1. DETEKSI LOGIN DI PERANGKAT INI (LOCAL STORAGE - LEVEL 1) ---
                 const localSession = localStorage.getItem('ukktkj_session_done');
                 if (localSession) {
                     const sessionData = JSON.parse(localSession);
-                    // Peringatan jika perangkat sudah dipakai
-                    if(!confirm(`Perangkat ini sebelumnya digunakan oleh ${sessionData.name}. Apakah Anda ingin melanjutkan login baru dengan nama ${name}?`)) {
-                        return;
+                    
+                    // HITUNG DURASI BLOKIR (12 JAM)
+                    const lastTime = new Date(sessionData.date).getTime();
+                    const now = Date.now();
+                    const diffHours = (now - lastTime) / (1000 * 60 * 60); // Konversi ke jam
+
+                    if (diffHours < 12) {
+                        const remaining = Math.ceil(12 - diffHours);
+                        alert(`⛔ AKSES DITOLAK (PERANGKAT TERKUNCI)\n\nPerangkat ini baru saja digunakan oleh: "${sessionData.name}".\n\nSistem membatasi penggunaan perangkat yang sama (Cooldown 12 Jam).\nSilakan coba lagi dalam ${remaining} jam.`);
+                        return; 
+                    } else {
+                        // Jika sudah lebih dari 12 jam, bersihkan sesi lama
+                        localStorage.removeItem('ukktkj_session_done');
                     }
                 }
 
-                // --- 2. DETEKSI DUPLIKAT DI DATABASE (SERVER SIDE CHECK) ---
+                // --- 2. DETEKSI LANJUTAN (SERVER SIDE CHECK + FINGERPRINT - LEVEL 2) ---
                 const submitBtn = e.target.querySelector('button');
                 const oldText = submitBtn.innerText;
                 submitBtn.disabled = true;
-                submitBtn.innerText = "Memeriksa Data...";
+                submitBtn.innerText = "Memeriksa Perangkat...";
 
-                // Kita fetch data ujian untuk mengecek apakah siswa ini sudah ada
+                const currentFp = getDeviceFingerprint(); // Ambil sidik jari HP saat ini
+                
+                // Kita fetch data ujian untuk mengecek apakah siswa ini sudah ada ATAU HP ini sudah dipakai
                 const qSnap = await getDocs(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'));
-                let isDuplicate = false;
+                
+                let isDuplicateName = false;
+                let isDeviceBlocked = false;
+                let blockedByWho = "";
+
+                // Waktu sekarang untuk cek 12 jam server side
+                const nowServer = Date.now();
+
                 qSnap.forEach(doc => {
                     const d = doc.data();
-                    // Cek kesamaan Nama dan Kelas (Case insensitive untuk nama)
-                    if (d.studentName.toLowerCase() === name.toLowerCase() && d.className === cls) {
-                        // Opsional: Boleh login ulang kalau statusnya DISKUALIFIKASI atau error tertentu, 
-                        // tapi defaultnya kita blokir untuk keamanan maksimal.
-                        isDuplicate = true;
+                    
+                    // Hitung umur data ujian ini
+                    const recordTime = d.timestamp;
+                    const recordAgeHours = (nowServer - recordTime) / (1000 * 60 * 60);
+
+                    // HANYA CEK JIKA DATA MASIH DALAM KURUN WAKTU 12 JAM TERAKHIR
+                    if (recordAgeHours < 12) {
+
+                        // Cek A: Nama Sama (Siswa yang sama login lagi)
+                        if (d.studentName.toLowerCase() === name.toLowerCase() && d.className === cls) {
+                            // Izinkan re-login HANYA jika statusnya masih mengerjakan (misal refresh/crash)
+                            // Tapi BLOKIR jika statusnya sudah SELESAI atau DISKUALIFIKASI
+                            if (d.status.includes('SELESAI') || d.status.includes('DISKUALIFIKASI')) {
+                                isDuplicateName = true; 
+                            }
+                        }
+
+                        // Cek B: Fingerprint Sama (HP yang sama, tapi mungkin ganti browser/nama)
+                        // Hanya blokir jika HP ini history-nya sudah "SELESAI" atau "DISKUALIFIKASI"
+                        if (d.deviceFingerprint === currentFp && (d.status.includes('SELESAI') || d.status.includes('DISKUALIFIKASI'))) {
+                            // Jika nama barunya BEDA dengan nama record lama, berarti dia mencoba menyamar
+                            if (d.studentName.toLowerCase() !== name.toLowerCase()) {
+                                isDeviceBlocked = true;
+                                blockedByWho = d.studentName;
+                            }
+                        }
                     }
                 });
 
-                if (isDuplicate) {
-                    alert(`⛔ AKSES DITOLAK\n\nSiswa atas nama "${name}" di kelas "${cls}" tercatat sedang atau sudah mengerjakan ujian.\n\nLogin berulang tidak diperbolehkan. Hubungi pengawas jika ini kesalahan.`);
+                if (isDuplicateName) {
+                    alert(`⛔ AKSES DITOLAK\n\nSiswa atas nama "${name}" tercatat SUDAH MENYELESAIKAN ujian atau DIDISKUALIFIKASI dalam 12 jam terakhir.\n\nTidak diizinkan login ulang.`);
+                    submitBtn.disabled = false;
+                    submitBtn.innerText = oldText;
+                    return;
+                }
+
+                if (isDeviceBlocked) {
+                    alert(`⛔ PERANGKAT DIBLOKIR (SISTEM ANTI-CHEAT)\n\nSistem mendeteksi HP/Perangkat ini baru saja digunakan oleh siswa: "${blockedByWho}".\n\nMohon gunakan perangkat sendiri. Perangkat ini terkunci selama 12 jam.`);
                     submitBtn.disabled = false;
                     submitBtn.innerText = oldText;
                     return;
@@ -1601,7 +1723,7 @@
             });
 
             if (window.currentFilteredData.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" class="px-6 py-12 text-center text-gray-400">Tidak ada data yang cocok dengan filter ini.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8" class="px-6 py-12 text-center text-gray-400">Tidak ada data yang cocok dengan filter ini.</td></tr>';
                 return;
             }
 
@@ -1641,6 +1763,11 @@
                         <td class="px-6 py-4 text-center text-lg font-bold text-gray-800">${item.score}</td>
                         <td class="px-6 py-4 ${statusColor}">${statusIcon} ${item.status}</td>
                         <td class="px-6 py-4 text-center">${violationDisplay}</td>
+                        <td class="px-6 py-4 text-center">
+                            <button onclick="window.deleteExamResult('${item.id}')" class="text-red-500 hover:bg-red-100 p-2 rounded transition-colors" title="Hapus Data">
+                                <i data-lucide="trash-2" class="w-4 h-4"></i>
+                            </button>
+                        </td>
                     </tr>
                 `;
                 tbody.innerHTML += row;
