@@ -493,7 +493,7 @@
                 </div>
                 <div class="flex items-center gap-2">
                     <div id="timer-box" class="flex items-center gap-2 px-4 py-2 rounded-lg font-mono font-bold text-lg bg-blue-50 text-blue-600">
-                        <i data-lucide="clock" class="w-5 h-5"></i> <span id="timer-display">60:00</span>
+                        <i data-lucide="clock" class="w-5 h-5"></i> <span id="timer-display">15:00</span>
                     </div>
                     <button onclick="window.toggleSidebar()" class="ml-2 p-2 rounded-lg hover:bg-slate-100 border border-slate-200 text-slate-700 flex items-center gap-2">
                         <i data-lucide="grid-3x3" class="w-5 h-5"></i> <span class="hidden md:inline text-sm font-semibold">Daftar Soal</span>
@@ -897,7 +897,7 @@
         // --- STATE ---
         let currentStudent = {};
         let examTimer = null;
-        let timeLeft = 3600; 
+        let timeLeft = 900; //3600 = 1 jam
         let violations = 0;
         let violationLogs = []; // NEW: Array to store log details
         let userAnswers = {};
@@ -1816,3 +1816,4 @@
     </script>
 </body>
 </html>
+
