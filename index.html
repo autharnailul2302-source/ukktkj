@@ -41,13 +41,17 @@
         window.auth = null;
         window.appId = 'ukktkj'; 
         window.isFirebaseReady = false;
+        
+        // --- GLOBAL SETTINGS ---
         window.currentExamToken = "TKJ2025"; 
+        window.examDuration = 60; // Default 60 menit
+        window.minSubmitDuration = 0; // Default 0 (Bisa langsung submit)
+        
         window.allQuestionsDB = []; 
         window.currentExamDocId = null; // ID dokumen ujian siswa saat ini
 
         // --- FIX: DEVICE FINGERPRINTING (Global Scope) ---
         // Membuat identitas unik perangkat berdasarkan hardware & browser traits
-        // Menggunakan window.getDeviceFingerprint agar bisa diakses global
         window.getDeviceFingerprint = function() {
             const nav = window.navigator;
             const screen = window.screen;
@@ -137,7 +141,7 @@
 
         initFirebase();
 
-        // Listeners
+        // Listeners for Settings (Token, Duration, Min Submit)
         function listenForToken() {
             if (!window.db) return;
             const q = query(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'app_settings'));
@@ -145,15 +149,22 @@
                 let latestTime = 0;
                 snapshot.forEach((doc) => {
                     const data = doc.data();
-                    if (data.timestamp > latestTime && data.token) {
+                    if (data.timestamp > latestTime) {
                         latestTime = data.timestamp;
-                        window.currentExamToken = data.token;
+                        if(data.token) window.currentExamToken = data.token;
+                        if(data.duration) window.examDuration = parseInt(data.duration);
+                        if(data.minSubmit) window.minSubmitDuration = parseInt(data.minSubmit);
                     }
                 });
-                const teacherInput = document.getElementById('teacher-token-input');
-                if(teacherInput && document.activeElement !== teacherInput) {
-                    teacherInput.value = window.currentExamToken;
-                }
+                
+                // Update UI Inputs if exists (Dashboard)
+                const tInput = document.getElementById('teacher-token-input');
+                const dInput = document.getElementById('teacher-duration-input');
+                const mInput = document.getElementById('teacher-min-submit-input');
+                
+                if(tInput && document.activeElement !== tInput) tInput.value = window.currentExamToken;
+                if(dInput && document.activeElement !== dInput) dInput.value = window.examDuration;
+                if(mInput && document.activeElement !== mInput) mInput.value = window.minSubmitDuration;
             });
         }
 
@@ -173,11 +184,10 @@
             });
         }
 
-        // --- NEW: START EXAM LOG (Create Document) ---
+        // --- EXAM LOGGING FUNCTIONS ---
         window.saveExamStart = async (data) => {
             if (window.isFirebaseReady && window.db) {
                 try {
-                    // Tambahkan fingerprint ke data
                     if (typeof window.getDeviceFingerprint === 'function') {
                         data.deviceFingerprint = window.getDeviceFingerprint();
                     } else {
@@ -185,7 +195,7 @@
                     }
                     
                     const docRef = await addDoc(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'), data);
-                    window.currentExamDocId = docRef.id; // Simpan ID untuk update nanti
+                    window.currentExamDocId = docRef.id; 
                     console.log("Exam started, doc created:", window.currentExamDocId);
                 } catch (e) {
                     console.error("Failed to log start", e);
@@ -193,16 +203,13 @@
             }
         }
 
-        // --- MODIFIED: SAVE RESULT (Update or Create) ---
         window.saveExamResult = async (data) => {
             if (window.isFirebaseReady && window.db) {
                 try {
                     if (window.currentExamDocId) {
-                        // Update dokumen yang sudah ada (biar status berubah dari 'Sedang Mengerjakan' ke 'Selesai')
                         await updateDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results', window.currentExamDocId), data);
                         console.log("Data updated in cloud");
                     } else {
-                        // Fallback jika ID hilang (misal refresh), buat baru
                         await addDoc(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'), data);
                         console.log("Data saved new to cloud");
                     }
@@ -214,15 +221,23 @@
             }
         }
 
-        window.saveToken = async () => {
-            const newToken = document.getElementById('teacher-token-input').value.trim().toUpperCase();
-            if(!newToken) return alert("Token tidak boleh kosong!");
+        // --- NEW: Save App Settings (Token, Duration, Min Submit) ---
+        window.saveAppSettings = async () => {
+            const token = document.getElementById('teacher-token-input').value.trim().toUpperCase();
+            const duration = parseInt(document.getElementById('teacher-duration-input').value);
+            const minSubmit = parseInt(document.getElementById('teacher-min-submit-input').value) || 0;
+            
+            if(!token || !duration) return alert("Token dan Durasi tidak boleh kosong!");
+            if(minSubmit > duration) return alert("Error: Waktu minimum submit tidak boleh lebih besar dari durasi ujian!");
+            
             if (window.isFirebaseReady && window.db) {
                 await addDoc(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'app_settings'), {
-                    token: newToken,
+                    token: token,
+                    duration: duration,
+                    minSubmit: minSubmit,
                     timestamp: Date.now()
                 });
-                alert("Token berhasil disimpan!");
+                alert("Pengaturan Ujian Berhasil Disimpan!");
             }
         };
 
@@ -259,18 +274,15 @@
             try { await deleteDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'questions', id)); } catch(e) { alert("Gagal hapus: " + e.message); }
         };
         
-        // --- NEW: DELETE EXAM RESULT (PER STUDENT) ---
         window.deleteExamResult = async (id) => {
             if(!confirm("Apakah Anda yakin ingin MENGHAPUS data ujian siswa ini?\n\nTindakan ini tidak dapat dibatalkan.")) return;
             try {
                 await deleteDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results', id));
-                // UI akan otomatis update via onSnapshot
             } catch(e) {
                 alert("Gagal menghapus: " + e.message);
             }
         };
 
-        // --- NEW: RESET ALL DATA ---
         window.resetAllExamData = async () => {
             const key = prompt("⚠️ PERINGATAN BAHAYA!\n\nAnda akan menghapus SEMUA data hasil ujian seluruh siswa.\nTindakan ini SANGAT TIDAK DAPAT DIBATALKAN.\n\nKetik 'HAPUS SEMUA' (Huruf Besar) untuk konfirmasi:");
             
@@ -282,7 +294,6 @@
             if(btn) { btn.disabled = true; btn.innerText = "Sedang Menghapus..."; }
 
             try {
-                // Fetch all docs first
                 const q = query(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'));
                 const snapshot = await getDocs(q);
                 
@@ -291,7 +302,6 @@
                     return;
                 }
 
-                // Delete one by one (Firestore client SDK limitations on batch delete for huge sets, looping is safer for small apps)
                 const deletePromises = [];
                 snapshot.forEach((doc) => {
                     deletePromises.push(deleteDoc(doc.ref));
@@ -375,7 +385,6 @@
             }
             const q = query(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'));
             
-            // Flag untuk mencegah alert muncul saat pertama kali load data
             let isInitialLoad = true;
 
             onSnapshot(q, (snapshot) => {
@@ -387,10 +396,8 @@
                 // --- LOGIKA DETEKSI KECURANGAN REALTIME ---
                 if (!isInitialLoad && window.currentUserRole === 'teacher') {
                     snapshot.docChanges().forEach((change) => {
-                        // Hanya cek jika data dimodifikasi atau ditambah
                         if (change.type === "modified" || change.type === "added") {
                             const data = change.doc.data();
-                            // Jika ada pelanggaran > 0 atau status mengandung kata diskualifikasi
                             if (data.violations > 0 || (data.status && data.status.includes("DISKUALIFIKASI"))) {
                                 if(window.triggerCheatAlert) window.triggerCheatAlert(data);
                             }
@@ -678,18 +685,31 @@
             <!-- PANEL 1: MONITORING NILAI -->
             <div id="panel-nilai">
                 <div class="bg-white rounded-xl shadow-sm border p-6 mb-6">
-                    <h2 class="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2"><i data-lucide="key" class="w-5 h-5 text-yellow-500"></i> Pengaturan Token</h2>
-                    <div class="flex flex-col md:flex-row items-center gap-4">
-                        <div class="flex-1 w-full">
-                            <label class="block text-sm font-medium text-gray-700 mb-1">Token Ujian Saat Ini</label>
-                            <div class="flex gap-2">
-                                <input type="text" id="teacher-token-input" class="w-full px-4 py-2 border rounded-lg font-mono text-xl font-bold tracking-widest text-center uppercase text-blue-600 bg-gray-50" placeholder="LOADING..." value="TKJ2025">
-                                <button onclick="window.saveToken()" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-bold shadow-md active:scale-95 transition-transform">Simpan</button>
-                            </div>
+                    <h2 class="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2"><i data-lucide="settings" class="w-5 h-5 text-gray-600"></i> Pengaturan Ujian</h2>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <!-- Token Input -->
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Token Ujian</label>
+                            <input type="text" id="teacher-token-input" class="w-full px-4 py-2 border rounded-lg font-mono text-xl font-bold tracking-widest text-center uppercase text-blue-600 bg-gray-50 mb-2" placeholder="LOADING..." value="TKJ2025">
+                            <p class="text-xs text-gray-500 mb-2">Token harus dimasukkan siswa untuk login.</p>
                         </div>
-                        <div class="p-4 bg-blue-50 rounded-lg border border-blue-100 text-sm text-blue-800 md:max-w-sm">
-                            <p class="flex gap-2"><i data-lucide="info" class="w-4 h-4 mt-0.5"></i> <span>Token ini harus dimasukkan siswa agar bisa login. Ganti token secara berkala untuk keamanan.</span></p>
+                        <!-- Duration Input -->
+                        <div>
+                             <label class="block text-sm font-medium text-gray-700 mb-1">Durasi Ujian (Menit)</label>
+                             <input type="number" id="teacher-duration-input" class="w-full px-4 py-2 border rounded-lg font-mono text-xl font-bold text-center text-blue-600 bg-gray-50 mb-2" placeholder="60" value="60" min="1">
+                             <p class="text-xs text-gray-500 mb-2">Waktu hitung mundur bagi siswa.</p>
                         </div>
+                         <!-- Min Submit Input -->
+                        <div>
+                             <label class="block text-sm font-medium text-gray-700 mb-1">Min. Submit (Menit)</label>
+                             <input type="number" id="teacher-min-submit-input" class="w-full px-4 py-2 border rounded-lg font-mono text-xl font-bold text-center text-red-600 bg-gray-50 mb-2" placeholder="0" value="0" min="0">
+                             <p class="text-xs text-gray-500 mb-2">Waktu minimal sebelum tombol selesai aktif.</p>
+                        </div>
+                    </div>
+                    <div class="mt-2 flex justify-end">
+                        <button onclick="window.saveAppSettings()" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-bold shadow-md active:scale-95 transition-transform flex items-center gap-2">
+                            <i data-lucide="save" class="w-4 h-4"></i> Simpan Pengaturan
+                        </button>
                     </div>
                 </div>
 
@@ -1242,6 +1262,15 @@
                 submitBtn.disabled = false;
                 submitBtn.innerText = oldText;
 
+                // --- SET TIME LEFT BASED ON DYNAMIC DURATION ---
+                timeLeft = (window.examDuration || 60) * 60;
+                // Update display immediately
+                const m = Math.floor(timeLeft / 60).toString().padStart(2, '0');
+                const s = (timeLeft % 60).toString().padStart(2, '0');
+                const timerDisplay = document.getElementById('timer-display');
+                if(timerDisplay) timerDisplay.innerText = `${m}:${s}`;
+                // -----------------------------------------------
+
                 currentQuestionIndex = 0;
                 renderQuestion();
                 renderSidebarButtons();
@@ -1312,6 +1341,20 @@
         };
 
         window.confirmFinishExam = function() {
+            // --- NEW: ANTI-SUBMIT CHECK ---
+            // Cek apakah siswa sudah mengerjakan minimal X menit
+            // timeLeft menghitung mundur dari Total. Jadi:
+            // Waktu Berjalan = (Total Durasi * 60) - Sisa Waktu
+            const elapsedSeconds = (window.examDuration * 60) - timeLeft;
+            const minSeconds = window.minSubmitDuration * 60;
+
+            if (elapsedSeconds < minSeconds) {
+                const remainingWait = Math.ceil((minSeconds - elapsedSeconds) / 60);
+                alert(`⛔ BELUM BISA KUMPULKAN!\n\nGuru menetapkan waktu minimal pengerjaan adalah ${window.minSubmitDuration} menit.\n\nAnda baru mengerjakan selama ${Math.floor(elapsedSeconds/60)} menit.\nSilakan periksa kembali jawaban Anda.\n\nSisa waktu tunggu: ±${remainingWait} menit.`);
+                return;
+            }
+            // -----------------------------
+
             const answeredCount = Object.keys(userAnswers).length;
             const total = currentQuestionList.length;
             
