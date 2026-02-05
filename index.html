@@ -45,10 +45,10 @@
         window.allQuestionsDB = []; 
         window.currentExamDocId = null; // ID dokumen ujian siswa saat ini
 
-        // --- NEW: DEVICE FINGERPRINTING ---
+        // --- FIX: DEVICE FINGERPRINTING (Global Scope) ---
         // Membuat identitas unik perangkat berdasarkan hardware & browser traits
-        // Ini mengatasi celah ganti browser/incognito
-        function getDeviceFingerprint() {
+        // Menggunakan window.getDeviceFingerprint agar bisa diakses global
+        window.getDeviceFingerprint = function() {
             const nav = window.navigator;
             const screen = window.screen;
             // Gabungkan properti unik: UserAgent + Resolusi Layar + Kedalaman Warna + CPU Cores + Timezone
@@ -62,7 +62,7 @@
                 hash = hash & hash; // Convert to 32bit integer
             }
             return "DEV-" + Math.abs(hash).toString(16);
-        }
+        };
 
         async function initFirebase() {
             try {
@@ -178,7 +178,11 @@
             if (window.isFirebaseReady && window.db) {
                 try {
                     // Tambahkan fingerprint ke data
-                    data.deviceFingerprint = getDeviceFingerprint();
+                    if (typeof window.getDeviceFingerprint === 'function') {
+                        data.deviceFingerprint = window.getDeviceFingerprint();
+                    } else {
+                        data.deviceFingerprint = "UNKNOWN-FP";
+                    }
                     
                     const docRef = await addDoc(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'), data);
                     window.currentExamDocId = docRef.id; // Simpan ID untuk update nanti
@@ -1120,7 +1124,11 @@
                 submitBtn.disabled = true;
                 submitBtn.innerText = "Memeriksa Perangkat...";
 
-                const currentFp = getDeviceFingerprint(); // Ambil sidik jari HP saat ini
+                // --- FIX: Gunakan window.getDeviceFingerprint untuk keamanan scope ---
+                let currentFp = "UNKNOWN";
+                if (typeof window.getDeviceFingerprint === 'function') {
+                    currentFp = window.getDeviceFingerprint(); 
+                }
                 
                 // Kita fetch data ujian untuk mengecek apakah siswa ini sudah ada ATAU HP ini sudah dipakai
                 const qSnap = await getDocs(collection(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results'));
@@ -1214,7 +1222,7 @@
                     await updateDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'exam_results', existingActiveDocId), {
                         status: "MELANJUTKAN (Re-Login)",
                         packetType: pkt, // Update jika siswa ganti paket
-                        deviceFingerprint: getDeviceFingerprint() // Update FP jaga-jaga ganti HP
+                        deviceFingerprint: currentFp // Update FP jaga-jaga ganti HP
                     });
                 } else {
                     // LOGIKA BARU: Buat Dokumen Baru
