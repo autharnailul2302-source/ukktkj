@@ -411,6 +411,25 @@
                 if(window.updateDashboardTable) window.updateDashboardTable(results);
             });
         }
+        
+        // --- NEW: INFO MODAL LOGIC (Replaces alert() to prevent cheating trigger) ---
+        window.openInfoModal = function(title, desc) {
+            document.getElementById('modal-info-title').innerText = title;
+            document.getElementById('modal-info-desc').innerText = desc;
+            const modal = document.getElementById('modal-info');
+            modal.classList.remove('hidden');
+            setTimeout(() => {
+                modal.classList.add('show');
+            }, 10);
+        };
+
+        window.closeInfoModal = function() {
+            const modal = document.getElementById('modal-info');
+            modal.classList.remove('show');
+            setTimeout(() => {
+                modal.classList.add('hidden');
+            }, 200);
+        };
     </script>
 
     <style>
@@ -426,10 +445,17 @@
         .sidebar-open { transform: translateX(0); }
         .animate-fade-in { animation: fadeIn 0.5s ease-out; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        
+        /* Modal Transitions */
         #modal-confirm { transition: opacity 0.2s ease-out; }
         #modal-confirm.show { opacity: 1; }
         #modal-content { transition: transform 0.2s ease-out; }
         #modal-confirm.show #modal-content { transform: scale(100%); }
+        
+        #modal-info { transition: opacity 0.2s ease-out; }
+        #modal-info.show { opacity: 1; }
+        #modal-info-content { transition: transform 0.2s ease-out; }
+        #modal-info.show #modal-info-content { transform: scale(100%); }
     </style>
 </head>
 <body>
@@ -563,6 +589,20 @@
                     <button onclick="window.closeModal()" class="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 font-semibold hover:bg-gray-50 transition-colors">Batal</button>
                     <button onclick="window.finalFinish()" class="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 shadow-lg shadow-blue-500/30 transition-all active:scale-95">Ya, Selesai</button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL INFO (REPLACEMENT FOR ALERT) -->
+    <div id="modal-info" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm hidden opacity-0 transition-opacity duration-300">
+        <div class="bg-white rounded-2xl shadow-2xl p-6 max-w-sm w-full mx-4 transform scale-90 transition-transform duration-300" id="modal-info-content">
+            <div class="text-center">
+                <div class="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <i data-lucide="info" class="w-8 h-8"></i>
+                </div>
+                <h3 class="text-xl font-bold text-gray-800 mb-2" id="modal-info-title">Informasi</h3>
+                <p class="text-gray-500 text-sm mb-6" id="modal-info-desc">Pesan informasi disini.</p>
+                <button onclick="window.closeInfoModal()" class="w-full px-4 py-2 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 shadow-lg transition-all active:scale-95">Mengerti</button>
             </div>
         </div>
     </div>
@@ -1350,7 +1390,8 @@
 
             if (elapsedSeconds < minSeconds) {
                 const remainingWait = Math.ceil((minSeconds - elapsedSeconds) / 60);
-                alert(`⛔ BELUM BISA KUMPULKAN!\n\nGuru menetapkan waktu minimal pengerjaan adalah ${window.minSubmitDuration} menit.\n\nAnda baru mengerjakan selama ${Math.floor(elapsedSeconds/60)} menit.\nSilakan periksa kembali jawaban Anda.\n\nSisa waktu tunggu: ±${remainingWait} menit.`);
+                // GANTI ALERT BIASA DENGAN MODAL AGAR TIDAK TRIGGER BLUR
+                window.openInfoModal("Belum Bisa Submit", `Guru menetapkan waktu minimal pengerjaan adalah ${window.minSubmitDuration} menit.\n\nAnda baru mengerjakan selama ${Math.floor(elapsedSeconds/60)} menit.\nSisa waktu tunggu: ±${remainingWait} menit.`);
                 return;
             }
             // -----------------------------
